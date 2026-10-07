@@ -110,6 +110,13 @@ impl CoreClient {
         self.client.reconnect_direct();
     }
 
+    /// Direct mode: the machine's addresses in a new dial order (network
+    /// changed). Keeps the current link; `reconnect_direct` moves now.
+    pub fn set_direct_endpoints(&self, endpoints: Vec<direct::SshEndpoint>) {
+        self.client
+            .set_direct_endpoints(endpoints.into_iter().map(Into::into).collect());
+    }
+
     pub fn device_id(&self) -> String {
         self.client.device_id().to_owned()
     }
@@ -372,31 +379,48 @@ impl CoreClient {
             .collect()
     }
 
-    /// Ask for session notifications on this device (APNs token as hex,
-    /// "production" | "sandbox", and which kinds).
-    pub async fn register_push_target(
+    /// [`Self::list_models`] plus the list's source. `force` makes the
+    /// engine re-probe the CLI (the user opened its model list or retried).
+    pub async fn model_catalog(
         &self,
-        token: String,
-        environment: String,
-        prefs: PushPrefs,
-    ) -> CoreResult<()> {
+        device_id: String,
+        harness: String,
+        force: bool,
+    ) -> ModelCatalog {
         let client = self.client.clone();
-        on_runtime(async move {
-            client
-                .register_push_target(
-                    &token,
-                    &environment,
-                    zc::PushPrefs { done: prefs.done, input: prefs.input, failed: prefs.failed },
-                )
-                .await
-        })
-        .await
+        let fallback = harness.clone();
+        on_runtime(async move { Ok(client.model_catalog(&device_id, &harness, force).await) })
+            .await
+            .unwrap_or_else(|err| zc::catalog::ModelCatalog {
+                models: zc::catalog::fallback_models(&fallback),
+                source: zc::catalog::CatalogSource::Static,
+                error: Some(err.to_string()),
+            })
+            .into()
     }
 
-    /// Stop session notifications to this device.
-    pub async fn unregister_push_target(&self) -> CoreResult<()> {
+    /// What New Session shows the moment it opens, read from disk only (no
+    /// request, never waits): every offered CLI with the models saved from
+    /// this computer's last good read (`Saved`), else the built-in list
+    /// (`Static`). Refreshed in the background on connect and every 30 min.
+    pub fn saved_catalog(&self, device_id: String) -> Vec<HarnessCatalog> {
+        self.client
+            .saved_catalog(&device_id)
+            .into_iter()
+            .map(|(harness, catalog)| HarnessCatalog {
+                harness: harness.into(),
+                catalog: catalog.into(),
+            })
+            .collect()
+    }
+
+    /// Read the file a link in `chat_id`'s transcript points at, from the
+    /// chat's workspace on its computer. `InvalidArgument` when the link
+    /// is outside the project folder.
+    pub async fn read_file_link(&self, chat_id: String, url: String) -> CoreResult<WorkspaceFile> {
         let client = self.client.clone();
-        on_runtime(async move { client.unregister_push_target().await }).await
+        let file = on_runtime(async move { client.read_file_link(&chat_id, &url).await }).await?;
+        Ok(file.into())
     }
 
     pub async fn list_refs(
@@ -420,7 +444,12 @@ impl CoreClient {
         query: String,
     ) -> CoreResult<Vec<FileMatch>> {
         let client = self.client.clone();
-        let files = on_runtime(async move { client.search_files(&device_id, chat_id, space_id, &query).await }).await?;
+        let files = on_runtime(async move {
+            client
+                .search_files(&device_id, chat_id, space_id, &query)
+                .await
+        })
+        .await?;
         Ok(files
             .into_iter()
             .map(|f| FileMatch {
@@ -458,11 +487,7 @@ impl CoreClient {
 
     /// Plan / rate-limit usage of the agent logins on a device. `force`
     /// re-probes the providers; otherwise the host's last probe is served.
-    pub async fn list_agent_usage(
-        &self,
-        device_id: String,
-        force: bool,
-    ) -> CoreResult<Vec<AgentUsage>> {
+    pub async fn list_agent_usage(&self, device_id: String, force: bool) -> CoreResult<Vec<AgentUsage>> {
         let client = self.client.clone();
         Ok(
             on_runtime(async move { client.list_agent_usage(&device_id, force).await })
@@ -549,6 +574,13 @@ impl CoreClient {
 // ── static helpers ─────────────────────────────────────────────────────────
 
 /// Production edge base URL.
+/// Is `url` a link to a file (opened in the file preview) rather than a
+/// web page?
+#[uniffi::export]
+pub fn is_file_link(url: String) -> bool {
+    zc::file_links::is_file_link(&url)
+}
+
 #[uniffi::export]
 pub fn auth_production_edge_url() -> String {
     zc::auth::PRODUCTION_EDGE_URL.to_owned()

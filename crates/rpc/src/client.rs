@@ -42,6 +42,10 @@ pub struct RpcClient {
     shared: Arc<Shared>,
     next_id: AtomicU64,
     reader: tokio::task::JoinHandle<()>,
+    /// The WebSocket's socket reader (`spawn_ws`), aborted on drop so the
+    /// transport (an SSH channel) closes now instead of after the message
+    /// in progress — possibly megabytes on a slow link — finishes.
+    transport: Option<tokio::task::AbortHandle>,
 }
 
 /// Owned stream receiver whose drop immediately cancels the server task.
@@ -141,6 +145,7 @@ impl RpcClient {
             shared,
             next_id: AtomicU64::new(1),
             reader,
+            transport: None,
         }
     }
 
@@ -276,6 +281,9 @@ impl RpcClient {
 impl Drop for RpcClient {
     fn drop(&mut self) {
         self.reader.abort();
+        if let Some(transport) = &self.transport {
+            transport.abort();
+        }
     }
 }
 
@@ -378,15 +386,28 @@ pub async fn connect_ws(url: &str) -> Result<RpcClient, RpcError> {
     Ok(spawn_ws(ws))
 }
 
+/// The largest message a tunnelled connection accepts. The engine sends a
+/// transcript's complete reset as one WebSocket message (one frame), and a
+/// long session's runs past tungstenite's default limits (16 MiB a frame,
+/// 64 MiB a message; a 16.4 MB opening reset was measured on a desktop):
+/// over the default the phone dropped the connection and asked again,
+/// forever, so that chat's older rows never arrived.
+const TUNNEL_MAX_MESSAGE: usize = 256 << 20;
+
 /// Run the WebSocket handshake over an already-open byte stream (e.g. an SSH
 /// `direct-tcpip` channel to the engine's loopback port) and wrap it.
 pub async fn connect_ws_stream<S>(url: &str, stream: S) -> Result<RpcClient, RpcError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+        max_message_size: Some(TUNNEL_MAX_MESSAGE),
+        max_frame_size: Some(TUNNEL_MAX_MESSAGE),
+        ..Default::default()
+    };
     let (ws, _) = tokio::time::timeout(
         CONNECT_TIMEOUT * 3,
-        tokio_tungstenite::client_async(url, stream),
+        tokio_tungstenite::client_async_with_config(url, stream, Some(config)),
     )
     .await
     .map_err(|_| RpcError::Transport(format!("timed out opening {url}")))?
@@ -423,7 +444,7 @@ where
             }
         }
     });
-    tokio::spawn(async move {
+    let transport = tokio::spawn(async move {
         // Dropped on exit: stops the writer.
         let _closed = closed_tx;
         while let Some(message) = stream.next().await {
@@ -438,7 +459,9 @@ where
             }
         }
     });
-    RpcClient::new(out_tx, in_rx)
+    let mut client = RpcClient::new(out_tx, in_rx);
+    client.transport = Some(transport.abort_handle());
+    client
 }
 
 #[cfg(test)]

@@ -120,8 +120,7 @@ final class AppModel {
         let owner: String
         switch credentials {
         case let .workOs(userId, orgId, _), let .dev(userId, orgId): owner = "\(userId)/\(orgId)"
-        // Direct (SSH) mode is Android-only for now.
-        case .demo, .direct: return
+        case .demo: return
         }
         let marker = coreDir.appendingPathComponent(".owner")
         if (try? String(contentsOf: marker, encoding: .utf8)) != owner {
@@ -604,7 +603,7 @@ extension Credentials {
             dict = ["kind": "workos", "userId": userId, "orgId": orgId, "access": tokens.accessToken, "refresh": tokens.refreshToken]
         case let .dev(userId, orgId):
             dict = ["kind": "dev", "userId": userId, "orgId": orgId]
-        case .demo, .direct:
+        case .demo:
             return
         }
         if let data = try? JSONSerialization.data(withJSONObject: dict) {

@@ -794,6 +794,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_zeron_mobile_checksum_func_harness_label(
     ): Int
+    external fun uniffi_zeron_mobile_checksum_func_is_file_link(
+    ): Int
     external fun uniffi_zeron_mobile_checksum_func_jwt_expiry(
     ): Int
     external fun uniffi_zeron_mobile_checksum_func_max_attachment_bytes(
@@ -888,6 +890,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_coreclient_mark_seen(
     ): Int
+    external fun uniffi_zeron_mobile_checksum_method_coreclient_model_catalog(
+    ): Int
     external fun uniffi_zeron_mobile_checksum_method_coreclient_move_pin(
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_coreclient_on_background(
@@ -912,15 +916,17 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_coreclient_read_attachment(
     ): Int
-    external fun uniffi_zeron_mobile_checksum_method_coreclient_reconnect_direct(
+    external fun uniffi_zeron_mobile_checksum_method_coreclient_read_file_link(
     ): Int
-    external fun uniffi_zeron_mobile_checksum_method_coreclient_register_push_target(
+    external fun uniffi_zeron_mobile_checksum_method_coreclient_reconnect_direct(
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_coreclient_rename_project(
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_coreclient_rename_section(
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_coreclient_rename_session(
+    ): Int
+    external fun uniffi_zeron_mobile_checksum_method_coreclient_saved_catalog(
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_coreclient_search(
     ): Int
@@ -931,6 +937,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_zeron_mobile_checksum_method_coreclient_session_config(
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_coreclient_session_row(
+    ): Int
+    external fun uniffi_zeron_mobile_checksum_method_coreclient_set_direct_endpoints(
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_coreclient_set_network_online(
     ): Int
@@ -947,8 +955,6 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_zeron_mobile_checksum_method_coreclient_unarchive_session(
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_coreclient_unpin_session(
-    ): Int
-    external fun uniffi_zeron_mobile_checksum_method_coreclient_unregister_push_target(
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_coreclient_update_tokens(
     ): Int
@@ -969,8 +975,6 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_zeron_mobile_checksum_method_sessionhandle_clear_queue_error(
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_sessionhandle_composer(
-    ): Int
-    external fun uniffi_zeron_mobile_checksum_method_sessionhandle_deliver_queued_now(
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_sessionhandle_enqueue(
     ): Int
@@ -1045,6 +1049,12 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_zeron_mobile_checksum_method_transcriptview_frame(
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_transcriptview_set_debug_entries(
+    ): Int
+    external fun uniffi_zeron_mobile_checksum_method_transcriptview_set_debug_history_pending(
+    ): Int
+    external fun uniffi_zeron_mobile_checksum_method_transcriptview_set_history_marker(
+    ): Int
+    external fun uniffi_zeron_mobile_checksum_method_transcriptview_set_turn_end_marker(
     ): Int
     external fun uniffi_zeron_mobile_checksum_method_transcriptview_set_viewport(
     ): Int
@@ -1150,6 +1160,8 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_zeron_mobile_fn_method_coreclient_mark_seen(`ptr`: Long,`chatId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_zeron_mobile_fn_method_coreclient_model_catalog(`ptr`: Long,`deviceId`: RustBuffer.ByValue,`harness`: RustBuffer.ByValue,`force`: Byte,
+    ): Long
     external fun uniffi_zeron_mobile_fn_method_coreclient_move_pin(`ptr`: Long,`chatId`: RustBuffer.ByValue,`after`: RustBuffer.ByValue,`before`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_zeron_mobile_fn_method_coreclient_on_background(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1174,16 +1186,18 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_zeron_mobile_fn_method_coreclient_read_attachment(`ptr`: Long,`deviceId`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,
     ): Long
+    external fun uniffi_zeron_mobile_fn_method_coreclient_read_file_link(`ptr`: Long,`chatId`: RustBuffer.ByValue,`url`: RustBuffer.ByValue,
+    ): Long
     external fun uniffi_zeron_mobile_fn_method_coreclient_reconnect_direct(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    external fun uniffi_zeron_mobile_fn_method_coreclient_register_push_target(`ptr`: Long,`token`: RustBuffer.ByValue,`environment`: RustBuffer.ByValue,`prefs`: RustBuffer.ByValue,
-    ): Long
     external fun uniffi_zeron_mobile_fn_method_coreclient_rename_project(`ptr`: Long,`spaceId`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_zeron_mobile_fn_method_coreclient_rename_section(`ptr`: Long,`sectionId`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_zeron_mobile_fn_method_coreclient_rename_session(`ptr`: Long,`chatId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_zeron_mobile_fn_method_coreclient_saved_catalog(`ptr`: Long,`deviceId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_zeron_mobile_fn_method_coreclient_search(`ptr`: Long,`query`: RustBuffer.ByValue,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_zeron_mobile_fn_method_coreclient_search_files(`ptr`: Long,`deviceId`: RustBuffer.ByValue,`chatId`: RustBuffer.ByValue,`spaceId`: RustBuffer.ByValue,`query`: RustBuffer.ByValue,
@@ -1194,6 +1208,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_zeron_mobile_fn_method_coreclient_session_row(`ptr`: Long,`chatId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_zeron_mobile_fn_method_coreclient_set_direct_endpoints(`ptr`: Long,`endpoints`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_zeron_mobile_fn_method_coreclient_set_network_online(`ptr`: Long,`online`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_zeron_mobile_fn_method_coreclient_set_section_collapsed(`ptr`: Long,`sectionId`: RustBuffer.ByValue,`collapsed`: Byte,uniffi_out_err: UniffiRustCallStatus, 
@@ -1210,8 +1226,6 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_zeron_mobile_fn_method_coreclient_unpin_session(`ptr`: Long,`chatId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    external fun uniffi_zeron_mobile_fn_method_coreclient_unregister_push_target(`ptr`: Long,
-    ): Long
     external fun uniffi_zeron_mobile_fn_method_coreclient_update_tokens(`ptr`: Long,`tokens`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_zeron_mobile_fn_method_coreclient_upload_attachment(`ptr`: Long,`deviceId`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,`data`: RustBuffer.ByValue,`progress`: RustBuffer.ByValue,
@@ -1242,8 +1256,6 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_zeron_mobile_fn_method_sessionhandle_composer(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_zeron_mobile_fn_method_sessionhandle_deliver_queued_now(`ptr`: Long,`id`: RustBuffer.ByValue,
-    ): Long
     external fun uniffi_zeron_mobile_fn_method_sessionhandle_enqueue(`ptr`: Long,`text`: RustBuffer.ByValue,`attachments`: RustBuffer.ByValue,`holdForTurnEnd`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_zeron_mobile_fn_method_sessionhandle_finish_queued_edit(`ptr`: Long,`lease`: RustBuffer.ByValue,`action`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,
@@ -1346,6 +1358,12 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_zeron_mobile_fn_method_transcriptview_set_debug_entries(`ptr`: Long,`entries`: RustBuffer.ByValue,`working`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_zeron_mobile_fn_method_transcriptview_set_debug_history_pending(`ptr`: Long,`receivedBytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_zeron_mobile_fn_method_transcriptview_set_history_marker(`ptr`: Long,`on`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_zeron_mobile_fn_method_transcriptview_set_turn_end_marker(`ptr`: Long,`on`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_zeron_mobile_fn_method_transcriptview_set_viewport(`ptr`: Long,`width`: Float,`textScale`: Float,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_zeron_mobile_fn_method_transcriptview_toggle(`ptr`: Long,`key`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1370,6 +1388,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_zeron_mobile_fn_func_harness_label(`harness`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_zeron_mobile_fn_func_is_file_link(`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_zeron_mobile_fn_func_jwt_expiry(`jwt`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_zeron_mobile_fn_func_max_attachment_bytes(uniffi_out_err: UniffiRustCallStatus, 
@@ -1539,7 +1559,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_zeron_mobile_checksum_func_auth_list_orgs() and 0xFFFF) != 21299) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_zeron_mobile_checksum_func_auth_production_edge_url() and 0xFFFF) != 61532) {
+    if ((lib.uniffi_zeron_mobile_checksum_func_auth_production_edge_url() and 0xFFFF) != 39974) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_zeron_mobile_checksum_func_auth_refresh() and 0xFFFF) != 53630) {
@@ -1552,6 +1572,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_zeron_mobile_checksum_func_harness_label() and 0xFFFF) != 26297) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_zeron_mobile_checksum_func_is_file_link() and 0xFFFF) != 1981) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_zeron_mobile_checksum_func_jwt_expiry() and 0xFFFF) != 29460) {
@@ -1695,6 +1718,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_mark_seen() and 0xFFFF) != 64234) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_model_catalog() and 0xFFFF) != 9259) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_move_pin() and 0xFFFF) != 26081) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1731,10 +1757,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_read_attachment() and 0xFFFF) != 50982) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_reconnect_direct() and 0xFFFF) != 46514) {
+    if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_read_file_link() and 0xFFFF) != 15569) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_register_push_target() and 0xFFFF) != 33942) {
+    if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_reconnect_direct() and 0xFFFF) != 46514) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_rename_project() and 0xFFFF) != 6571) {
@@ -1744,6 +1770,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_rename_session() and 0xFFFF) != 49666) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_saved_catalog() and 0xFFFF) != 20977) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_search() and 0xFFFF) != 33140) {
@@ -1759,6 +1788,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_session_row() and 0xFFFF) != 10938) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_set_direct_endpoints() and 0xFFFF) != 17416) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_set_network_online() and 0xFFFF) != 33835) {
@@ -1783,9 +1815,6 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_unpin_session() and 0xFFFF) != 9102) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_unregister_push_target() and 0xFFFF) != 55720) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_zeron_mobile_checksum_method_coreclient_update_tokens() and 0xFFFF) != 39229) {
@@ -1816,9 +1845,6 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_zeron_mobile_checksum_method_sessionhandle_composer() and 0xFFFF) != 12678) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if ((lib.uniffi_zeron_mobile_checksum_method_sessionhandle_deliver_queued_now() and 0xFFFF) != 65003) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_zeron_mobile_checksum_method_sessionhandle_enqueue() and 0xFFFF) != 37832) {
@@ -1930,6 +1956,15 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_zeron_mobile_checksum_method_transcriptview_set_debug_entries() and 0xFFFF) != 54762) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_zeron_mobile_checksum_method_transcriptview_set_debug_history_pending() and 0xFFFF) != 4520) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_zeron_mobile_checksum_method_transcriptview_set_history_marker() and 0xFFFF) != 22633) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_zeron_mobile_checksum_method_transcriptview_set_turn_end_marker() and 0xFFFF) != 39735) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_zeron_mobile_checksum_method_transcriptview_set_viewport() and 0xFFFF) != 43528) {
@@ -2968,6 +3003,12 @@ public interface CoreClientInterface {
     fun `markSeen`(`chatId`: kotlin.String)
     
     /**
+     * [`Self::list_models`] plus the list's source. `force` makes the
+     * engine re-probe the CLI (the user opened its model list or retried).
+     */
+    suspend fun `modelCatalog`(`deviceId`: kotlin.String, `harness`: kotlin.String, `force`: kotlin.Boolean): ModelCatalog
+    
+    /**
      * Reorder a pin between neighbours (`None` at either end).
      */
     fun `movePin`(`chatId`: kotlin.String, `after`: kotlin.String?, `before`: kotlin.String?)
@@ -3013,21 +3054,30 @@ public interface CoreClientInterface {
     suspend fun `readAttachment`(`deviceId`: kotlin.String, `path`: kotlin.String): kotlin.ByteArray
     
     /**
+     * Read the file a link in `chat_id`'s transcript points at, from the
+     * chat's workspace on its computer. `InvalidArgument` when the link
+     * is outside the project folder.
+     */
+    suspend fun `readFileLink`(`chatId`: kotlin.String, `url`: kotlin.String): WorkspaceFile
+    
+    /**
      * Direct mode: drop the current link, even a stalled one, and redial.
      */
     fun `reconnectDirect`()
-    
-    /**
-     * Ask for session notifications on this device (APNs token as hex,
-     * "production" | "sandbox", and which kinds).
-     */
-    suspend fun `registerPushTarget`(`token`: kotlin.String, `environment`: kotlin.String, `prefs`: PushPrefs)
     
     fun `renameProject`(`spaceId`: kotlin.String, `name`: kotlin.String?)
     
     fun `renameSection`(`sectionId`: kotlin.String, `name`: kotlin.String)
     
     fun `renameSession`(`chatId`: kotlin.String, `title`: kotlin.String)
+    
+    /**
+     * What New Session shows the moment it opens, read from disk only (no
+     * request, never waits): every offered CLI with the models saved from
+     * this computer's last good read (`Saved`), else the built-in list
+     * (`Static`). Refreshed in the background on connect and every 30 min.
+     */
+    fun `savedCatalog`(`deviceId`: kotlin.String): List<HarnessCatalog>
     
     fun `search`(`query`: kotlin.String, `limit`: kotlin.UInt): List<SearchHit>
     
@@ -3048,6 +3098,12 @@ public interface CoreClientInterface {
      * Any chat row (archived and child chats included).
      */
     fun `sessionRow`(`chatId`: kotlin.String): SessionRow?
+    
+    /**
+     * Direct mode: the machine's addresses in a new dial order (network
+     * changed). Keeps the current link; `reconnect_direct` moves now.
+     */
+    fun `setDirectEndpoints`(`endpoints`: List<SshEndpoint>)
     
     /**
      * OS network path: `false` only for a definitive "unsatisfied".
@@ -3076,11 +3132,6 @@ public interface CoreClientInterface {
     fun `unarchiveSession`(`chatId`: kotlin.String)
     
     fun `unpinSession`(`chatId`: kotlin.String)
-    
-    /**
-     * Stop session notifications to this device.
-     */
-    suspend fun `unregisterPushTarget`()
     
     /**
      * The platform restored/re-signed a newer WorkOS pair.
@@ -3720,6 +3771,33 @@ open class CoreClient: Disposable, AutoCloseable, CoreClientInterface
 
     
     /**
+     * [`Self::list_models`] plus the list's source. `force` makes the
+     * engine re-probe the CLI (the user opened its model list or retried).
+     */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `modelCatalog`(`deviceId`: kotlin.String, `harness`: kotlin.String, `force`: kotlin.Boolean) : ModelCatalog {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_zeron_mobile_fn_method_coreclient_model_catalog(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`deviceId`),
+        FfiConverterString.lower(`harness`),
+        FfiConverterBoolean.lower(`force`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_zeron_mobile_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_zeron_mobile_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_zeron_mobile_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeModelCatalog.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+    
+    /**
      * Reorder a pin between neighbours (`None` at either end).
      */
     @Throws(CoreException::class)override fun `movePin`(`chatId`: kotlin.String, `after`: kotlin.String?, `before`: kotlin.String?)
@@ -3911,6 +3989,34 @@ open class CoreClient: Disposable, AutoCloseable, CoreClientInterface
 
     
     /**
+     * Read the file a link in `chat_id`'s transcript points at, from the
+     * chat's workspace on its computer. `InvalidArgument` when the link
+     * is outside the project folder.
+     */
+    @Throws(CoreException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `readFileLink`(`chatId`: kotlin.String, `url`: kotlin.String) : WorkspaceFile {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_zeron_mobile_fn_method_coreclient_read_file_link(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`chatId`),
+        FfiConverterString.lower(`url`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_zeron_mobile_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_zeron_mobile_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_zeron_mobile_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeWorkspaceFile.lift(it) },
+        // Error FFI converter
+        CoreException.ErrorHandler,
+    )
+    }
+
+    
+    /**
      * Direct mode: drop the current link, even a stalled one, and redial.
      */override fun `reconnectDirect`()
         = 
@@ -3923,35 +4029,6 @@ open class CoreClient: Disposable, AutoCloseable, CoreClientInterface
     }
     
     
-
-    
-    /**
-     * Ask for session notifications on this device (APNs token as hex,
-     * "production" | "sandbox", and which kinds).
-     */
-    @Throws(CoreException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `registerPushTarget`(`token`: kotlin.String, `environment`: kotlin.String, `prefs`: PushPrefs) {
-        return uniffiRustCallAsync(
-        callWithHandle { uniffiHandle ->
-            UniffiLib.uniffi_zeron_mobile_fn_method_coreclient_register_push_target(
-                uniffiHandle,
-                
-        FfiConverterString.lower(`token`),
-        FfiConverterString.lower(`environment`),
-        FfiConverterTypePushPrefs.lower(`prefs`),
-            )
-        },
-        { future, callback, continuation -> UniffiLib.ffi_zeron_mobile_rust_future_poll_void(future, callback, continuation) },
-        { future, continuation -> UniffiLib.ffi_zeron_mobile_rust_future_complete_void(future, continuation) },
-        { future -> UniffiLib.ffi_zeron_mobile_rust_future_free_void(future) },
-        // lift function
-        { },
-        
-        // Error FFI converter
-        CoreException.ErrorHandler,
-    )
-    }
 
     
     @Throws(CoreException::class)override fun `renameProject`(`spaceId`: kotlin.String, `name`: kotlin.String?)
@@ -3996,6 +4073,26 @@ open class CoreClient: Disposable, AutoCloseable, CoreClientInterface
 }
     }
     
+    
+
+    
+    /**
+     * What New Session shows the moment it opens, read from disk only (no
+     * request, never waits): every offered CLI with the models saved from
+     * this computer's last good read (`Saved`), else the built-in list
+     * (`Static`). Refreshed in the background on connect and every 30 min.
+     */override fun `savedCatalog`(`deviceId`: kotlin.String): List<HarnessCatalog> {
+            return FfiConverterSequenceTypeHarnessCatalog.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_zeron_mobile_fn_method_coreclient_saved_catalog(
+        it,
+        
+        FfiConverterString.lower(`deviceId`),_status)
+}
+    }
+    )
+    }
     
 
     override fun `search`(`query`: kotlin.String, `limit`: kotlin.UInt): List<SearchHit> {
@@ -4088,6 +4185,23 @@ open class CoreClient: Disposable, AutoCloseable, CoreClientInterface
     }
     )
     }
+    
+
+    
+    /**
+     * Direct mode: the machine's addresses in a new dial order (network
+     * changed). Keeps the current link; `reconnect_direct` moves now.
+     */override fun `setDirectEndpoints`(`endpoints`: List<SshEndpoint>)
+        = 
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_zeron_mobile_fn_method_coreclient_set_direct_endpoints(
+        it,
+        
+        FfiConverterSequenceTypeSshEndpoint.lower(`endpoints`),_status)
+}
+    }
+    
     
 
     
@@ -4233,31 +4347,6 @@ open class CoreClient: Disposable, AutoCloseable, CoreClientInterface
     }
     
     
-
-    
-    /**
-     * Stop session notifications to this device.
-     */
-    @Throws(CoreException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `unregisterPushTarget`() {
-        return uniffiRustCallAsync(
-        callWithHandle { uniffiHandle ->
-            UniffiLib.uniffi_zeron_mobile_fn_method_coreclient_unregister_push_target(
-                uniffiHandle,
-                
-            )
-        },
-        { future, callback, continuation -> UniffiLib.ffi_zeron_mobile_rust_future_poll_void(future, callback, continuation) },
-        { future, continuation -> UniffiLib.ffi_zeron_mobile_rust_future_complete_void(future, continuation) },
-        { future -> UniffiLib.ffi_zeron_mobile_rust_future_free_void(future) },
-        // lift function
-        { },
-        
-        // Error FFI converter
-        CoreException.ErrorHandler,
-    )
-    }
 
     
     /**
@@ -5699,12 +5788,6 @@ public interface SessionHandleInterface {
     fun `composer`(): ComposerState
     
     /**
-     * A row's primary action: steer text into the live turn (never
-     * interrupts); attachments send now.
-     */
-    suspend fun `deliverQueuedNow`(`id`: kotlin.String): kotlin.Boolean
-    
-    /**
      * Park a message on the shared queue directly. Returns the row id.
      */
     fun `enqueue`(`text`: kotlin.String, `attachments`: List<kotlin.String>, `holdForTurnEnd`: kotlin.Boolean): kotlin.String
@@ -5930,32 +6013,6 @@ open class SessionHandle: Disposable, AutoCloseable, SessionHandleInterface
     )
     }
     
-
-    
-    /**
-     * A row's primary action: steer text into the live turn (never
-     * interrupts); attachments send now.
-     */
-    @Throws(CoreException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `deliverQueuedNow`(`id`: kotlin.String) : kotlin.Boolean {
-        return uniffiRustCallAsync(
-        callWithHandle { uniffiHandle ->
-            UniffiLib.uniffi_zeron_mobile_fn_method_sessionhandle_deliver_queued_now(
-                uniffiHandle,
-                
-        FfiConverterString.lower(`id`),
-            )
-        },
-        { future, callback, continuation -> UniffiLib.ffi_zeron_mobile_rust_future_poll_i8(future, callback, continuation) },
-        { future, continuation -> UniffiLib.ffi_zeron_mobile_rust_future_complete_i8(future, continuation) },
-        { future -> UniffiLib.ffi_zeron_mobile_rust_future_free_i8(future) },
-        // lift function
-        { FfiConverterBoolean.lift(it) },
-        // Error FFI converter
-        CoreException.ErrorHandler,
-    )
-    }
 
     
     /**
@@ -6642,6 +6699,28 @@ public interface TranscriptViewInterface {
      */
     fun `setDebugEntries`(`entries`: List<DebugEntry>, `working`: kotlin.Boolean)
     
+    /**
+     * Head the next [`TranscriptView::set_debug_entries`] fixtures with the
+     * "loading earlier messages" row (`received_bytes` so far), or not
+     * (`None`). Renders and tests.
+     */
+    fun `setDebugHistoryPending`(`receivedBytes`: kotlin.ULong?)
+    
+    /**
+     * While only a transcript's newest rows are here (a Direct link's
+     * opening tail) and the older ones are still downloading, head it with
+     * a spinner, "Loading earlier messages…" and how much has come in
+     * (`WidgetKind::HistoryPending`). Off by default; call before `attach`.
+     */
+    fun `setHistoryMarker`(`on`: kotlin.Boolean)
+    
+    /**
+     * Once no turn runs, end the transcript with how the last one ended
+     * (a done check / failed dot and the time; `WidgetKind::TurnEnd`).
+     * Off by default; call before `attach`.
+     */
+    fun `setTurnEndMarker`(`on`: kotlin.Boolean)
+    
     fun `setViewport`(`width`: kotlin.Float, `textScale`: kotlin.Float)
     
     /**
@@ -6830,6 +6909,61 @@ open class TranscriptView: Disposable, AutoCloseable, TranscriptViewInterface
         
         FfiConverterSequenceTypeDebugEntry.lower(`entries`),
         FfiConverterBoolean.lower(`working`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Head the next [`TranscriptView::set_debug_entries`] fixtures with the
+     * "loading earlier messages" row (`received_bytes` so far), or not
+     * (`None`). Renders and tests.
+     */override fun `setDebugHistoryPending`(`receivedBytes`: kotlin.ULong?)
+        = 
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_zeron_mobile_fn_method_transcriptview_set_debug_history_pending(
+        it,
+        
+        FfiConverterOptionalULong.lower(`receivedBytes`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * While only a transcript's newest rows are here (a Direct link's
+     * opening tail) and the older ones are still downloading, head it with
+     * a spinner, "Loading earlier messages…" and how much has come in
+     * (`WidgetKind::HistoryPending`). Off by default; call before `attach`.
+     */override fun `setHistoryMarker`(`on`: kotlin.Boolean)
+        = 
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_zeron_mobile_fn_method_transcriptview_set_history_marker(
+        it,
+        
+        FfiConverterBoolean.lower(`on`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Once no turn runs, end the transcript with how the last one ended
+     * (a done check / failed dot and the time; `WidgetKind::TurnEnd`).
+     * Off by default; call before `attach`.
+     */override fun `setTurnEndMarker`(`on`: kotlin.Boolean)
+        = 
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_zeron_mobile_fn_method_transcriptview_set_turn_end_marker(
+        it,
+        
+        FfiConverterBoolean.lower(`on`),_status)
 }
     }
     
@@ -8135,6 +8269,80 @@ public object FfiConverterTypeDeviceView: FfiConverterRustBuffer<DeviceView> {
 
 
 
+/**
+ * How one address last fared.
+ */
+data class DirectEndpointStat (
+    var `host`: kotlin.String
+    , 
+    var `port`: kotlin.UShort
+    , 
+    var `kind`: kotlin.String
+    , 
+    /**
+     * The current link runs over it.
+     */
+    var `active`: kotlin.Boolean
+    , 
+    var `lastAttemptMs`: kotlin.Long?
+    , 
+    var `lastOkMs`: kotlin.Long?
+    , 
+    var `lastError`: kotlin.String?
+    , 
+    var `latencyMs`: kotlin.ULong?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDirectEndpointStat: FfiConverterRustBuffer<DirectEndpointStat> {
+    override fun read(buf: ByteBuffer): DirectEndpointStat {
+        return DirectEndpointStat(
+            FfiConverterString.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DirectEndpointStat) = (
+            FfiConverterString.allocationSize(value.`host`) +
+            FfiConverterUShort.allocationSize(value.`port`) +
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterBoolean.allocationSize(value.`active`) +
+            FfiConverterOptionalLong.allocationSize(value.`lastAttemptMs`) +
+            FfiConverterOptionalLong.allocationSize(value.`lastOkMs`) +
+            FfiConverterOptionalString.allocationSize(value.`lastError`) +
+            FfiConverterOptionalULong.allocationSize(value.`latencyMs`)
+    )
+
+    override fun write(value: DirectEndpointStat, buf: ByteBuffer) {
+            FfiConverterString.write(value.`host`, buf)
+            FfiConverterUShort.write(value.`port`, buf)
+            FfiConverterString.write(value.`kind`, buf)
+            FfiConverterBoolean.write(value.`active`, buf)
+            FfiConverterOptionalLong.write(value.`lastAttemptMs`, buf)
+            FfiConverterOptionalLong.write(value.`lastOkMs`, buf)
+            FfiConverterOptionalString.write(value.`lastError`, buf)
+            FfiConverterOptionalULong.write(value.`latencyMs`, buf)
+    }
+}
+
+
+
 data class DirectLogLine (
     var `atMs`: kotlin.Long
     , 
@@ -8200,6 +8408,16 @@ data class DirectStatus (
     var `streams`: List<DirectStreamStat>
     , 
     var `log`: List<DirectLogLine>
+    , 
+    /**
+     * Phone clock minus the computer's (ms), from session heartbeats.
+     */
+    var `clockOffsetMs`: kotlin.Long?
+    , 
+    /**
+     * The machine's addresses in dial order, with their last outcome.
+     */
+    var `endpoints`: List<DirectEndpointStat>
     
 ){
     
@@ -8226,6 +8444,8 @@ public object FfiConverterTypeDirectStatus: FfiConverterRustBuffer<DirectStatus>
             FfiConverterOptionalLong.read(buf),
             FfiConverterSequenceTypeDirectStreamStat.read(buf),
             FfiConverterSequenceTypeDirectLogLine.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterSequenceTypeDirectEndpointStat.read(buf),
         )
     }
 
@@ -8239,7 +8459,9 @@ public object FfiConverterTypeDirectStatus: FfiConverterRustBuffer<DirectStatus>
             FfiConverterOptionalLong.allocationSize(value.`connectedAtMs`) +
             FfiConverterOptionalLong.allocationSize(value.`syncedAtMs`) +
             FfiConverterSequenceTypeDirectStreamStat.allocationSize(value.`streams`) +
-            FfiConverterSequenceTypeDirectLogLine.allocationSize(value.`log`)
+            FfiConverterSequenceTypeDirectLogLine.allocationSize(value.`log`) +
+            FfiConverterOptionalLong.allocationSize(value.`clockOffsetMs`) +
+            FfiConverterSequenceTypeDirectEndpointStat.allocationSize(value.`endpoints`)
     )
 
     override fun write(value: DirectStatus, buf: ByteBuffer) {
@@ -8253,6 +8475,8 @@ public object FfiConverterTypeDirectStatus: FfiConverterRustBuffer<DirectStatus>
             FfiConverterOptionalLong.write(value.`syncedAtMs`, buf)
             FfiConverterSequenceTypeDirectStreamStat.write(value.`streams`, buf)
             FfiConverterSequenceTypeDirectLogLine.write(value.`log`, buf)
+            FfiConverterOptionalLong.write(value.`clockOffsetMs`, buf)
+            FfiConverterSequenceTypeDirectEndpointStat.write(value.`endpoints`, buf)
     }
 }
 
@@ -8648,6 +8872,47 @@ public object FfiConverterTypeFrontPage: FfiConverterRustBuffer<FrontPage> {
 
 
 
+/**
+ * One CLI and its model list, as New Session opens on them.
+ */
+data class HarnessCatalog (
+    var `harness`: HarnessInfo
+    , 
+    var `catalog`: ModelCatalog
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeHarnessCatalog: FfiConverterRustBuffer<HarnessCatalog> {
+    override fun read(buf: ByteBuffer): HarnessCatalog {
+        return HarnessCatalog(
+            FfiConverterTypeHarnessInfo.read(buf),
+            FfiConverterTypeModelCatalog.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: HarnessCatalog) = (
+            FfiConverterTypeHarnessInfo.allocationSize(value.`harness`) +
+            FfiConverterTypeModelCatalog.allocationSize(value.`catalog`)
+    )
+
+    override fun write(value: HarnessCatalog, buf: ByteBuffer) {
+            FfiConverterTypeHarnessInfo.write(value.`harness`, buf)
+            FfiConverterTypeModelCatalog.write(value.`catalog`, buf)
+    }
+}
+
+
+
 data class HarnessInfo (
     var `id`: kotlin.String
     , 
@@ -9011,6 +9276,53 @@ public object FfiConverterTypeLiveStatus: FfiConverterRustBuffer<LiveStatus> {
             FfiConverterOptionalLong.write(value.`workingSinceMs`, buf)
             FfiConverterBoolean.write(value.`streaming`, buf)
             FfiConverterBoolean.write(value.`canInterrupt`, buf)
+    }
+}
+
+
+
+/**
+ * A harness's models plus where they came from (and why the live read
+ * failed, when it did).
+ */
+data class ModelCatalog (
+    var `models`: List<ModelInfo>
+    , 
+    var `source`: CatalogSource
+    , 
+    var `error`: kotlin.String?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeModelCatalog: FfiConverterRustBuffer<ModelCatalog> {
+    override fun read(buf: ByteBuffer): ModelCatalog {
+        return ModelCatalog(
+            FfiConverterSequenceTypeModelInfo.read(buf),
+            FfiConverterTypeCatalogSource.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ModelCatalog) = (
+            FfiConverterSequenceTypeModelInfo.allocationSize(value.`models`) +
+            FfiConverterTypeCatalogSource.allocationSize(value.`source`) +
+            FfiConverterOptionalString.allocationSize(value.`error`)
+    )
+
+    override fun write(value: ModelCatalog, buf: ByteBuffer) {
+            FfiConverterSequenceTypeModelInfo.write(value.`models`, buf)
+            FfiConverterTypeCatalogSource.write(value.`source`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
     }
 }
 
@@ -9672,52 +9984,6 @@ public object FfiConverterTypePullRequestGroups: FfiConverterRustBuffer<PullRequ
             FfiConverterSequenceTypeSessionRow.write(value.`open`, buf)
             FfiConverterSequenceTypeSessionRow.write(value.`merged`, buf)
             FfiConverterSequenceTypeSessionRow.write(value.`closed`, buf)
-    }
-}
-
-
-
-/**
- * Which session notifications this device wants.
- */
-data class PushPrefs (
-    var `done`: kotlin.Boolean
-    , 
-    var `input`: kotlin.Boolean
-    , 
-    var `failed`: kotlin.Boolean
-    
-){
-    
-
-    
-
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypePushPrefs: FfiConverterRustBuffer<PushPrefs> {
-    override fun read(buf: ByteBuffer): PushPrefs {
-        return PushPrefs(
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: PushPrefs) = (
-            FfiConverterBoolean.allocationSize(value.`done`) +
-            FfiConverterBoolean.allocationSize(value.`input`) +
-            FfiConverterBoolean.allocationSize(value.`failed`)
-    )
-
-    override fun write(value: PushPrefs, buf: ByteBuffer) {
-            FfiConverterBoolean.write(value.`done`, buf)
-            FfiConverterBoolean.write(value.`input`, buf)
-            FfiConverterBoolean.write(value.`failed`, buf)
     }
 }
 
@@ -10392,6 +10658,12 @@ data class SessionRow (
     var `hostIndicator`: ChatIndicator
     , 
     /**
+     * Last run outcome, not cleared by the seen marker (see the client's
+     * `SessionRow::last_outcome`): Completed / Errored stay after viewing.
+     */
+    var `lastOutcome`: ChatIndicator
+    , 
+    /**
      * Run start of the live turn while Working/AwaitingInput.
      */
     var `workingSinceMs`: kotlin.Long?
@@ -10460,6 +10732,7 @@ public object FfiConverterTypeSessionRow: FfiConverterRustBuffer<SessionRow> {
             FfiConverterOptionalString.read(buf),
             FfiConverterTypeChatIndicator.read(buf),
             FfiConverterTypeChatIndicator.read(buf),
+            FfiConverterTypeChatIndicator.read(buf),
             FfiConverterOptionalLong.read(buf),
             FfiConverterLong.read(buf),
             FfiConverterString.read(buf),
@@ -10494,6 +10767,7 @@ public object FfiConverterTypeSessionRow: FfiConverterRustBuffer<SessionRow> {
             FfiConverterOptionalString.allocationSize(value.`cwd`) +
             FfiConverterTypeChatIndicator.allocationSize(value.`indicator`) +
             FfiConverterTypeChatIndicator.allocationSize(value.`hostIndicator`) +
+            FfiConverterTypeChatIndicator.allocationSize(value.`lastOutcome`) +
             FfiConverterOptionalLong.allocationSize(value.`workingSinceMs`) +
             FfiConverterLong.allocationSize(value.`lastActivityMs`) +
             FfiConverterString.allocationSize(value.`timeLabel`) +
@@ -10527,6 +10801,7 @@ public object FfiConverterTypeSessionRow: FfiConverterRustBuffer<SessionRow> {
             FfiConverterOptionalString.write(value.`cwd`, buf)
             FfiConverterTypeChatIndicator.write(value.`indicator`, buf)
             FfiConverterTypeChatIndicator.write(value.`hostIndicator`, buf)
+            FfiConverterTypeChatIndicator.write(value.`lastOutcome`, buf)
             FfiConverterOptionalLong.write(value.`workingSinceMs`, buf)
             FfiConverterLong.write(value.`lastActivityMs`, buf)
             FfiConverterString.write(value.`timeLabel`, buf)
@@ -10539,6 +10814,71 @@ public object FfiConverterTypeSessionRow: FfiConverterRustBuffer<SessionRow> {
             FfiConverterOptionalTypeSendState.write(value.`sendState`, buf)
             FfiConverterOptionalString.write(value.`parentChatId`, buf)
             FfiConverterUInt.write(value.`roomGen`, buf)
+    }
+}
+
+
+
+/**
+ * Another address of the same machine (LAN IP, Tailscale IP, …).
+ */
+data class SshEndpoint (
+    var `host`: kotlin.String
+    , 
+    var `port`: kotlin.UShort
+    , 
+    /**
+     * The app's name for it ("lan", "tailscale", …), echoed in the status.
+     */
+    var `kind`: kotlin.String
+    , 
+    /**
+     * Tried alone this long before the next address joins (0 = until it fails).
+     */
+    var `headStartMs`: kotlin.UInt
+    , 
+    /**
+     * Give up reaching it (TCP + SSH handshake) after this long; 0 = 20 s.
+     */
+    var `connectTimeoutMs`: kotlin.UInt
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSshEndpoint: FfiConverterRustBuffer<SshEndpoint> {
+    override fun read(buf: ByteBuffer): SshEndpoint {
+        return SshEndpoint(
+            FfiConverterString.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SshEndpoint) = (
+            FfiConverterString.allocationSize(value.`host`) +
+            FfiConverterUShort.allocationSize(value.`port`) +
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterUInt.allocationSize(value.`headStartMs`) +
+            FfiConverterUInt.allocationSize(value.`connectTimeoutMs`)
+    )
+
+    override fun write(value: SshEndpoint, buf: ByteBuffer) {
+            FfiConverterString.write(value.`host`, buf)
+            FfiConverterUShort.write(value.`port`, buf)
+            FfiConverterString.write(value.`kind`, buf)
+            FfiConverterUInt.write(value.`headStartMs`, buf)
+            FfiConverterUInt.write(value.`connectTimeoutMs`, buf)
     }
 }
 
@@ -10608,6 +10948,11 @@ data class SshTarget (
      * Pinned host key (`SHA256:…`); `None` until the user trusts it.
      */
     var `hostKeyFingerprint`: kotlin.String?
+    , 
+    /**
+     * Every address to try, in order; empty = just `host:port`.
+     */
+    var `endpoints`: List<SshEndpoint>
     
 ){
     
@@ -10630,6 +10975,7 @@ public object FfiConverterTypeSshTarget: FfiConverterRustBuffer<SshTarget> {
             FfiConverterTypeSshAuth.read(buf),
             FfiConverterUShort.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceTypeSshEndpoint.read(buf),
         )
     }
 
@@ -10639,7 +10985,8 @@ public object FfiConverterTypeSshTarget: FfiConverterRustBuffer<SshTarget> {
             FfiConverterString.allocationSize(value.`user`) +
             FfiConverterTypeSshAuth.allocationSize(value.`auth`) +
             FfiConverterUShort.allocationSize(value.`enginePort`) +
-            FfiConverterOptionalString.allocationSize(value.`hostKeyFingerprint`)
+            FfiConverterOptionalString.allocationSize(value.`hostKeyFingerprint`) +
+            FfiConverterSequenceTypeSshEndpoint.allocationSize(value.`endpoints`)
     )
 
     override fun write(value: SshTarget, buf: ByteBuffer) {
@@ -10649,6 +10996,7 @@ public object FfiConverterTypeSshTarget: FfiConverterRustBuffer<SshTarget> {
             FfiConverterTypeSshAuth.write(value.`auth`, buf)
             FfiConverterUShort.write(value.`enginePort`, buf)
             FfiConverterOptionalString.write(value.`hostKeyFingerprint`, buf)
+            FfiConverterSequenceTypeSshEndpoint.write(value.`endpoints`, buf)
     }
 }
 
@@ -11133,6 +11481,58 @@ public object FfiConverterTypeWidget: FfiConverterRustBuffer<Widget> {
 
 
 /**
+ * A workspace file read for the file preview. `text` is `None` for
+ * binary files; `truncated` when the engine cut a large file short.
+ */
+data class WorkspaceFile (
+    var `path`: kotlin.String
+    , 
+    var `text`: kotlin.String?
+    , 
+    var `size`: kotlin.ULong
+    , 
+    var `truncated`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeWorkspaceFile: FfiConverterRustBuffer<WorkspaceFile> {
+    override fun read(buf: ByteBuffer): WorkspaceFile {
+        return WorkspaceFile(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: WorkspaceFile) = (
+            FfiConverterString.allocationSize(value.`path`) +
+            FfiConverterOptionalString.allocationSize(value.`text`) +
+            FfiConverterULong.allocationSize(value.`size`) +
+            FfiConverterBoolean.allocationSize(value.`truncated`)
+    )
+
+    override fun write(value: WorkspaceFile, buf: ByteBuffer) {
+            FfiConverterString.write(value.`path`, buf)
+            FfiConverterOptionalString.write(value.`text`, buf)
+            FfiConverterULong.write(value.`size`, buf)
+            FfiConverterBoolean.write(value.`truncated`, buf)
+    }
+}
+
+
+
+/**
  * Everything the workspace screens render.
  */
 data class WorkspaceSnapshot (
@@ -11434,6 +11834,53 @@ public object FfiConverterTypeBusyPolicy: FfiConverterRustBuffer<BusyPolicy> {
     override fun allocationSize(value: BusyPolicy) = 4UL
 
     override fun write(value: BusyPolicy, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * Where a model list came from.
+ */
+
+enum class CatalogSource {
+    
+    /**
+     * The computer answered just now.
+     */
+    LIVE,
+    /**
+     * The computer didn't answer: the list it gave last time.
+     */
+    SAVED,
+    /**
+     * Never heard from the computer: the built-in list.
+     */
+    STATIC;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeCatalogSource: FfiConverterRustBuffer<CatalogSource> {
+    override fun read(buf: ByteBuffer) = try {
+        CatalogSource.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: CatalogSource) = 4UL
+
+    override fun write(value: CatalogSource, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -12860,6 +13307,10 @@ enum class RowKind {
     TOOLS,
     CHIP,
     IMAGE,
+    /**
+     * The transcript's tail status row: a running turn, or how the last
+     * one ended.
+     */
     WORKING;
 
     
@@ -13738,6 +14189,36 @@ sealed class WidgetKind {
     }
     
     /**
+     * How the last turn ended, at the transcript's end once none runs: a
+     * done check or a failed dot, then the time it ended (`at_ms`, epoch
+     * ms), which the painter labels itself so it never goes stale.
+     */
+    data class TurnEnd(
+        val `failed`: kotlin.Boolean, 
+        val `atMs`: kotlin.Long) : WidgetKind()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * At the transcript's head while only its newest rows are here and the
+     * older ones are still downloading: a spinner and "Loading earlier
+     * messages…", then how much has come in (`received_bytes`; 0 = not
+     * known), which the painter formats.
+     */
+    data class HistoryPending(
+        val `receivedBytes`: kotlin.ULong) : WidgetKind()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
      * A small activity spinner (running tools).
      */
     object Spinner : WidgetKind()
@@ -13853,18 +14334,25 @@ public object FfiConverterTypeWidgetKind : FfiConverterRustBuffer<WidgetKind>{
                 FfiConverterOptionalLong.read(buf),
                 FfiConverterBoolean.read(buf),
                 )
-            6 -> WidgetKind.Spinner
-            7 -> WidgetKind.Detail(
+            6 -> WidgetKind.TurnEnd(
+                FfiConverterBoolean.read(buf),
+                FfiConverterLong.read(buf),
+                )
+            7 -> WidgetKind.HistoryPending(
+                FfiConverterULong.read(buf),
+                )
+            8 -> WidgetKind.Spinner
+            9 -> WidgetKind.Detail(
                 FfiConverterString.read(buf),
                 )
-            8 -> WidgetKind.Icon(
+            10 -> WidgetKind.Icon(
                 FfiConverterString.read(buf),
                 FfiConverterTypeColorRole.read(buf),
                 )
-            9 -> WidgetKind.Chevron(
+            11 -> WidgetKind.Chevron(
                 FfiConverterBoolean.read(buf),
                 )
-            10 -> WidgetKind.ToolRail(
+            12 -> WidgetKind.ToolRail(
                 FfiConverterFloat.read(buf),
                 FfiConverterFloat.read(buf),
                 FfiConverterFloat.read(buf),
@@ -13872,11 +14360,11 @@ public object FfiConverterTypeWidgetKind : FfiConverterRustBuffer<WidgetKind>{
                 FfiConverterSequenceFloat.read(buf),
                 FfiConverterSequenceFloat.read(buf),
                 )
-            11 -> WidgetKind.ToolToggle(
+            13 -> WidgetKind.ToolToggle(
                 FfiConverterULong.read(buf),
                 FfiConverterBoolean.read(buf),
                 )
-            12 -> WidgetKind.Shimmer
+            14 -> WidgetKind.Shimmer
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -13916,6 +14404,21 @@ public object FfiConverterTypeWidgetKind : FfiConverterRustBuffer<WidgetKind>{
                 4UL
                 + FfiConverterOptionalLong.allocationSize(value.`sinceMs`)
                 + FfiConverterBoolean.allocationSize(value.`streaming`)
+            )
+        }
+        is WidgetKind.TurnEnd -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterBoolean.allocationSize(value.`failed`)
+                + FfiConverterLong.allocationSize(value.`atMs`)
+            )
+        }
+        is WidgetKind.HistoryPending -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterULong.allocationSize(value.`receivedBytes`)
             )
         }
         is WidgetKind.Spinner -> {
@@ -14002,28 +14505,39 @@ public object FfiConverterTypeWidgetKind : FfiConverterRustBuffer<WidgetKind>{
                 FfiConverterBoolean.write(value.`streaming`, buf)
                 Unit
             }
-            is WidgetKind.Spinner -> {
+            is WidgetKind.TurnEnd -> {
                 buf.putInt(6)
+                FfiConverterBoolean.write(value.`failed`, buf)
+                FfiConverterLong.write(value.`atMs`, buf)
+                Unit
+            }
+            is WidgetKind.HistoryPending -> {
+                buf.putInt(7)
+                FfiConverterULong.write(value.`receivedBytes`, buf)
+                Unit
+            }
+            is WidgetKind.Spinner -> {
+                buf.putInt(8)
                 Unit
             }
             is WidgetKind.Detail -> {
-                buf.putInt(7)
+                buf.putInt(9)
                 FfiConverterString.write(value.`title`, buf)
                 Unit
             }
             is WidgetKind.Icon -> {
-                buf.putInt(8)
+                buf.putInt(10)
                 FfiConverterString.write(value.`name`, buf)
                 FfiConverterTypeColorRole.write(value.`color`, buf)
                 Unit
             }
             is WidgetKind.Chevron -> {
-                buf.putInt(9)
+                buf.putInt(11)
                 FfiConverterBoolean.write(value.`expanded`, buf)
                 Unit
             }
             is WidgetKind.ToolRail -> {
-                buf.putInt(10)
+                buf.putInt(12)
                 FfiConverterFloat.write(value.`trunkX`, buf)
                 FfiConverterFloat.write(value.`bend`, buf)
                 FfiConverterFloat.write(value.`branchEnd`, buf)
@@ -14033,13 +14547,13 @@ public object FfiConverterTypeWidgetKind : FfiConverterRustBuffer<WidgetKind>{
                 Unit
             }
             is WidgetKind.ToolToggle -> {
-                buf.putInt(11)
+                buf.putInt(13)
                 FfiConverterULong.write(value.`detail`, buf)
                 FfiConverterBoolean.write(value.`open`, buf)
                 Unit
             }
             is WidgetKind.Shimmer -> {
-                buf.putInt(12)
+                buf.putInt(14)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -15046,6 +15560,34 @@ public object FfiConverterSequenceTypeDeviceView: FfiConverterRustBuffer<List<De
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeDirectEndpointStat: FfiConverterRustBuffer<List<DirectEndpointStat>> {
+    override fun read(buf: ByteBuffer): List<DirectEndpointStat> {
+        val len = buf.getInt()
+        return List<DirectEndpointStat>(len) {
+            FfiConverterTypeDirectEndpointStat.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<DirectEndpointStat>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeDirectEndpointStat.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<DirectEndpointStat>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeDirectEndpointStat.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeDirectLogLine: FfiConverterRustBuffer<List<DirectLogLine>> {
     override fun read(buf: ByteBuffer): List<DirectLogLine> {
         val len = buf.getInt()
@@ -15232,6 +15774,34 @@ public object FfiConverterSequenceTypeFolderEntry: FfiConverterRustBuffer<List<F
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeFolderEntry.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeHarnessCatalog: FfiConverterRustBuffer<List<HarnessCatalog>> {
+    override fun read(buf: ByteBuffer): List<HarnessCatalog> {
+        val len = buf.getInt()
+        return List<HarnessCatalog>(len) {
+            FfiConverterTypeHarnessCatalog.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<HarnessCatalog>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeHarnessCatalog.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<HarnessCatalog>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeHarnessCatalog.write(it, buf)
         }
     }
 }
@@ -15662,6 +16232,34 @@ public object FfiConverterSequenceTypeSessionRow: FfiConverterRustBuffer<List<Se
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeSshEndpoint: FfiConverterRustBuffer<List<SshEndpoint>> {
+    override fun read(buf: ByteBuffer): List<SshEndpoint> {
+        val len = buf.getInt()
+        return List<SshEndpoint>(len) {
+            FfiConverterTypeSshEndpoint.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<SshEndpoint>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeSshEndpoint.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<SshEndpoint>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeSshEndpoint.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeStyleDesc: FfiConverterRustBuffer<List<StyleDesc>> {
     override fun read(buf: ByteBuffer): List<StyleDesc> {
         val len = buf.getInt()
@@ -15963,10 +16561,7 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
         CoreException.ErrorHandler,
     )
     }
-
-        /**
-         * Production edge base URL.
-         */ fun `authProductionEdgeUrl`(): kotlin.String {
+ fun `authProductionEdgeUrl`(): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_zeron_mobile_fn_func_auth_production_edge_url(
@@ -16031,6 +16626,22 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     
         
         FfiConverterString.lower(`harness`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Production edge base URL.
+         * Is `url` a link to a file (opened in the file preview) rather than a
+         * web page?
+         */ fun `isFileLink`(`url`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_zeron_mobile_fn_func_is_file_link(
+    
+        
+        FfiConverterString.lower(`url`),_status)
 }
     )
     }

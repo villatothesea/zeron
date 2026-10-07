@@ -34,13 +34,16 @@ mod demo;
 pub mod direct;
 pub mod error;
 pub mod events;
+pub mod file_links;
 mod live;
 pub mod rpc;
 pub mod runtime;
 pub mod session;
 pub mod workspace;
 
-pub use client::{Client, NewSession, PRELOAD_CAP, PushPrefs, SessionTarget, WARM_SESSION_CAP};
+pub use client::{
+    Client, DIRECT_KEPT_TRANSCRIPTS, NewSession, PRELOAD_CAP, SessionTarget, WARM_SESSION_CAP,
+};
 pub use config::{
     AuthTokens, ClientConfig, Credentials, DemoFixture, DemoOptions, StreamSpeed, TranscriptScale,
 };
@@ -51,7 +54,7 @@ pub use session::{
     AppendHint, BusyPolicy, ComposerState, Entry, HostCapabilities, HostInfo, InputRequest,
     LiveStatus, LocalEcho, OutgoingAttachment, PendingKind, PendingSend, QueueEditAction,
     QueueEditFinish, QueueEditLease, QueueEditStart, QueueGate, QueueItem, RoomState, SendOutcome,
-    SendRequest, SessionHandle, SessionSnapshot, SnapshotDelta, SnapshotWatch,
+    SendRequest, SessionHandle, SessionSnapshot, SnapshotDelta, SnapshotWatch, TurnOutcome,
 };
 pub use workspace::{
     DeviceView, FrontPage, ProjectRef, ProjectView, PullRequestGroups, SearchField, SearchHit,

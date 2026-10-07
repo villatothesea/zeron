@@ -2,7 +2,10 @@
 //! WebSocket IPC carried over a `direct-tcpip` channel (nothing listens on
 //! the phone), TOFU host-key pinning, ed25519 key generation/import.
 
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use russh::client;
@@ -121,6 +124,18 @@ impl SshSession {
         &self,
         engine_port: u16,
     ) -> Result<zeron_rpc::RpcClient, SshError> {
+        self.open_engine_counted(engine_port)
+            .await
+            .map(|(rpc, _)| rpc)
+    }
+
+    /// [`Self::open_engine`], with a running count of the bytes received on
+    /// the channel (after SSH decompression): how far a multi-MB message in
+    /// progress has come, which the WebSocket only hands over once whole.
+    pub(crate) async fn open_engine_counted(
+        &self,
+        engine_port: u16,
+    ) -> Result<(zeron_rpc::RpcClient, Arc<AtomicU64>), SshError> {
         let channel = tokio::time::timeout(
             HANDSHAKE_TIMEOUT,
             self.handle
@@ -133,14 +148,52 @@ impl SshSession {
                 "the machine refused a tunnel to 127.0.0.1:{engine_port} ({e}). Is Zeron running there?"
             ))
         })?;
-        let stream = channel.into_stream();
+        let received = Arc::new(AtomicU64::new(0));
+        let stream = Counted {
+            inner: channel.into_stream(),
+            received: received.clone(),
+        };
         zeron_rpc::connect_ws_stream(&format!("ws://127.0.0.1:{engine_port}/"), stream)
             .await
+            .map(|rpc| (rpc, received))
             .map_err(|e| {
                 SshError::Engine(format!(
                     "no Zeron engine answered on 127.0.0.1:{engine_port} ({e})"
                 ))
             })
+    }
+
+    /// Run one read-only command on the machine (an `exec` channel) and
+    /// return what it printed, at most `limit` bytes; `None` if it can't be
+    /// run, fails, or takes longer than `within`.
+    pub(crate) async fn exec_read(
+        &self,
+        command: &str,
+        limit: usize,
+        within: Duration,
+    ) -> Option<Vec<u8>> {
+        let run = async {
+            let mut channel = self.handle.channel_open_session().await.ok()?;
+            channel.exec(true, command).await.ok()?;
+            let mut out = Vec::new();
+            let mut status = None;
+            while let Some(msg) = channel.wait().await {
+                match msg {
+                    russh::ChannelMsg::Data { data } => {
+                        if out.len() + data.len() > limit {
+                            return None;
+                        }
+                        out.extend_from_slice(&data);
+                    }
+                    russh::ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+                    russh::ChannelMsg::Failure => return None,
+                    russh::ChannelMsg::Close => break,
+                    _ => {}
+                }
+            }
+            (status == Some(0)).then_some(out)
+        };
+        tokio::time::timeout(within, run).await.ok().flatten()
     }
 
     pub(crate) async fn close(&self) {
@@ -153,6 +206,15 @@ impl SshSession {
 
 /// Connect + verify the host key + authenticate.
 pub(crate) async fn connect(target: &SshTarget) -> Result<SshSession, SshError> {
+    connect_within(target, HANDSHAKE_TIMEOUT).await
+}
+
+/// [`connect`], giving up reaching the address (TCP + SSH handshake) after
+/// `reach` instead of the default.
+pub(crate) async fn connect_within(
+    target: &SshTarget,
+    reach: Duration,
+) -> Result<SshSession, SshError> {
     let config = Arc::new(client::Config {
         keepalive_interval: Some(KEEPALIVE),
         keepalive_max: KEEPALIVE_MAX,
@@ -161,6 +223,22 @@ pub(crate) async fn connect(target: &SshTarget) -> Result<SshSession, SshError> 
         // russh parks its whole session loop when a channel's queue is full;
         // leave room for a burst of snapshot frames.
         channel_buffer_size: 1024,
+        // Ask for zlib (OpenSSH's delayed zlib@openssh.com first). russh
+        // lists "none" first by default, so the session ran uncompressed
+        // although Windows OpenSSH offers zlib (Compression delayed is its
+        // default). Transcript JSON deflates ~3x (measured on a 0.2.101
+        // engine: tail 56→17 KB, reset 1.7→0.55 MB / 8.4→2.95 MB, a running
+        // turn's 80 KB update → 24 KB), which on a ~20 KB/s DERP relay is the
+        // difference between a running chat keeping up and falling minutes
+        // behind. A server without zlib negotiates "none" as before.
+        preferred: russh::Preferred {
+            compression: std::borrow::Cow::Borrowed(&[
+                russh::compression::ZLIB_LEGACY,
+                russh::compression::ZLIB,
+                russh::compression::NONE,
+            ]),
+            ..russh::Preferred::DEFAULT
+        },
         ..Default::default()
     });
     let seen = Arc::new(Mutex::new(None));
@@ -172,8 +250,7 @@ pub(crate) async fn connect(target: &SshTarget) -> Result<SshSession, SshError> 
         seen: seen.clone(),
     };
     let addr = (target.host.trim().to_owned(), target.port);
-    let connected =
-        tokio::time::timeout(HANDSHAKE_TIMEOUT, client::connect(config, addr, handler)).await;
+    let connected = tokio::time::timeout(reach, client::connect(config, addr, handler)).await;
     let seen_key = crate::lock(&seen).clone();
     let mut handle = match connected {
         Err(_) => {
@@ -301,4 +378,45 @@ pub async fn probe(target: &SshTarget) -> Result<ProbeResult, SshError> {
     .await;
     session.close().await;
     result
+}
+
+/// A byte stream that counts what it reads (see
+/// [`SshSession::open_engine_counted`]).
+struct Counted<S> {
+    inner: S,
+    received: Arc<AtomicU64>,
+}
+
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for Counted<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let polled = Pin::new(&mut self.inner).poll_read(cx, buf);
+        if let Poll::Ready(Ok(())) = polled {
+            let read = (buf.filled().len() - before) as u64;
+            self.received.fetch_add(read, Ordering::Relaxed);
+        }
+        polled
+    }
+}
+
+impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for Counted<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
 }

@@ -1,44 +1,16 @@
-# SSH direct mode (Android)
+# SSH 直连模式：手机直接连你的 Windows 电脑
 
-The Android app can drive a Zeron engine on one of your own computers without
-a Zeron account and without the edge relay. The phone logs in to the computer
-over SSH and opens a `direct-tcpip` channel to the engine's loopback IPC port
-(`127.0.0.1:27654`, or `ZERON_IPC_PORT`). Nothing new listens on the network:
-the engine keeps its loopback-only port, and the only port you expose is sshd.
+不需要 Zeron 云账号，也不经过中继。手机通过 SSH 登录你的电脑，再经 SSH 隧道
+（direct-tcpip）连到本机的 Zeron 引擎（`127.0.0.1:27654`）。引擎端口不对外开放，
+只开放 SSH（22）。
 
 ```
-phone ──SSH (22)──▶ sshd on the computer ──direct-tcpip──▶ 127.0.0.1:27654 (Zeron engine)
+手机 ──SSH(22)──▶ Windows sshd ──隧道──▶ 127.0.0.1:27654 (Zeron 引擎)
 ```
 
-The client side lives in `crates/client/src/direct` (SSH via `russh`), the FFI
-in `crates/mobile/src/client_ffi/direct.rs`, and the Machines screens in
-`apps/android`. The engine is unchanged; the phone speaks the same `EngineRpc`
-the desktop UI uses and mirrors the registry and transcript streams into its
-local documents, so sessions, the composer and commands work as in synced mode.
+以下命令都在**管理员 PowerShell** 中执行（开始菜单右键 → 终端(管理员)）。
 
-## Security boundary
-
-- **SSH login is the trust decision.** Anyone who can log in as the OS user can
-  already reach the engine's loopback port, so direct mode grants the phone the
-  same access a local process of that user has — no more. It adds no listener,
-  no token and no engine-side code.
-- **Host keys are pinned on first use.** The first connection shows the
-  server's `SHA256:` fingerprint and connects only after you trust it. A changed
-  key later is refused ("Host key changed") until you explicitly trust the new
-  one.
-- **Credentials stay on the phone.** The phone generates its own Ed25519 key
-  (or imports one, or uses a password). Private keys and passwords are encrypted
-  with an AES-GCM key held in the Android Keystore and stored in app-private
-  preferences; `allowBackup` is off. They are only ever sent to the SSH server,
-  and the diagnostics text the app can copy never includes them (it does
-  include the user name and host address).
-- The tunnel only ever targets `127.0.0.1:<engine port>` on the computer.
-
-## Set up a Windows computer
-
-Run these in an **administrator** PowerShell.
-
-### 1. Install and start OpenSSH Server
+## 1. 安装并启动 OpenSSH Server
 
 ```powershell
 Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
@@ -46,148 +18,134 @@ Start-Service sshd
 Set-Service sshd -StartupType Automatic
 ```
 
-The installer normally adds a firewall rule. Check it:
+检查防火墙规则（安装时通常会自动创建）：
 
 ```powershell
 Get-NetFirewallRule -Name *OpenSSH-Server* | Select-Object Name, Enabled, Profile
 ```
 
-If nothing is listed, add one:
+如果没有输出，手动添加：
 
 ```powershell
 New-NetFirewallRule -Name OpenSSH-Server-In-TCP -DisplayName "OpenSSH Server (sshd)" -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
 ```
 
-### 2. Authorize the phone's public key
+## 2. 添加手机的公钥
 
-On the phone, open **Settings → Machines → This phone's SSH key** and tap
-**Copy public key**. Get the line (`ssh-ed25519 AAAA… zeron-…`) to the computer.
+在手机上点首页右上角的头像图标进入 **设置 → 账户与电脑**，在页面底部 **本机 SSH 密钥** 下点 **复制公钥**，发到电脑上
+（微信文件传输助手、邮件等都可以）。整行形如 `ssh-ed25519 AAAA... zeron-xxx`。
 
-For an administrator account, Windows OpenSSH reads
-`administrators_authorized_keys`, not `%USERPROFILE%\.ssh\authorized_keys`:
+管理员账户的公钥必须放在 `administrators_authorized_keys`（不是用户目录下的
+`.ssh\authorized_keys`）：
 
 ```powershell
-$key = 'ssh-ed25519 AAAA...paste the whole line from the phone...'
+$key = 'ssh-ed25519 AAAA...把手机上复制的整行粘贴到这里...'
 Add-Content -Path C:\ProgramData\ssh\administrators_authorized_keys -Value $key -Encoding ascii
 icacls C:\ProgramData\ssh\administrators_authorized_keys /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"
 ```
 
-> If the file's permissions are wrong (for example, inherited read access for
-> Users), sshd silently ignores it and the phone reports an authentication
-> failure.
+> 权限不对（例如继承了 Users 的读取权限）时，sshd 会静默忽略这个文件，手机会提示认证失败。
 
-For a non-administrator account:
+如果你的 Windows 账户**不是**管理员，改为：
 
 ```powershell
 New-Item -ItemType Directory -Force $env:USERPROFILE\.ssh | Out-Null
 Add-Content -Path $env:USERPROFILE\.ssh\authorized_keys -Value $key -Encoding ascii
 ```
 
-You can also choose **Password** on the phone instead of a key (the Windows
-account password; for a Microsoft account, its password).
+也可以不用公钥，在手机上选择"密码"登录（使用 Windows 账户密码；微软账户登录的电脑用微软账户密码）。
 
-### 3. Find the computer's address
+## 3. 查电脑的局域网 IP
 
 ```powershell
 ipconfig
 ```
 
-Use the **IPv4 address** of the active adapter. The phone must reach it: same
-LAN, or an overlay network such as Tailscale or ZeroTier (use that address).
+找到正在使用的网卡（WLAN 或 以太网）下的 **IPv4 地址**，形如 `192.168.x.x`。
+手机和电脑需在同一局域网（或通过 Tailscale/ZeroTier 等组网，填对应 IP）。
 
-### 4. Keep the Zeron engine running
+## 4. 让 Zeron 引擎保持运行
 
-Leaving the Zeron desktop app open is enough. To run the engine headless at
-logon instead, find the executable (while Zeron runs):
+最简单：电脑上保持 Zeron 应用打开。
+
+或者登录时自动以无界面模式启动引擎。Zeron 是免安装的单个 exe，先确定它的路径
+（Zeron 正在运行时可以直接查）：
 
 ```powershell
 (Get-Process zeron).Path
 ```
 
-and register a logon task with that path:
+把输出的路径填进 `$exe`，然后创建登录任务：
 
 ```powershell
-$exe = "C:\path\to\zeron.exe"
+$exe = "C:\Tools\Zeron\zeron.exe"
 schtasks /Create /TN "Zeron Headless" /SC ONLOGON /RL LIMITED /TR "\"$exe\" headless"
 schtasks /Run /TN "Zeron Headless"
 ```
 
-### 5. Check
+## 5. 验证
+
+引擎在监听 27654：
 
 ```powershell
-netstat -ano | findstr 27654     # expect 127.0.0.1:27654 ... LISTENING
-netstat -ano | findstr ":22 "    # sshd
+netstat -ano | findstr 27654
 ```
 
-### 6. Note the host key fingerprint
+应看到 `127.0.0.1:27654 ... LISTENING`。
+
+sshd 在监听 22：
+
+```powershell
+netstat -ano | findstr ":22 "
+```
+
+## 6. 核对主机指纹（首次连接时）
 
 ```powershell
 ssh-keygen -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub
 ```
 
-The output looks like `256 SHA256:… (ED25519)`. Compare it with the
-fingerprint the phone shows on first connection before tapping **Trust**.
+输出形如 `256 SHA256:xxxxxxxx... (ED25519)`。手机第一次连接时会弹出
+**信任这台电脑吗？**，显示 `SHA256:...` 指纹，**两者一致再点 信任**。
+之后如果指纹变化，手机会拒绝连接并提示 **主机密钥已变更**（可能是重装系统，
+也可能是中间人攻击）。
 
-## macOS and Linux
+## 7. 在手机上添加机器
 
-Any OpenSSH server that allows TCP forwarding works. On macOS enable
-**System Settings → General → Sharing → Remote Login**; on Linux install and
-start `openssh-server`. Append the phone's public key to
-`~/.ssh/authorized_keys`, and get the fingerprint with
-`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`. The engine must be running
-(`zeron daemon status`).
+**设置 → 账户与电脑 → 添加电脑**（或 **设置 → 添加电脑（SSH）…**）：
 
-## Add the machine on the phone
-
-**Settings → Machines → +**:
-
-| Field | Value |
+| 字段 | 填写 |
 | --- | --- |
-| Name | Anything, e.g. `My PC` |
-| Host | The address from step 3 |
-| SSH port | `22` |
-| Zeron port | `27654` (default) |
-| User | The OS user name (on Windows, the part after `\` in `whoami`) |
-| Sign in with | This phone's key (recommended) / Import key / Password |
+| 名称 | 随意，例如 `家里的电脑` |
+| 主机 | 第 3 步的 IPv4 地址 |
+| SSH 端口 | `22` |
+| Zeron 端口 | `27654`（默认） |
+| 用户名 | Windows 用户名（`$env:USERNAME` 的输出） |
+| 登录方式 | 本机密钥（推荐）/ 导入密钥 / 密码 |
 
-Tap **Test**, compare the fingerprint, tap **Trust**, wait for
-"Connected · Zeron 0.2.x answered in … ms", then **Save & Connect**.
+点 **测试** → 核对指纹 → **信任** → 看到 **已连接 · Zeron 0.2.x 响应用时 … ms** → **保存并连接**。
 
-## Troubleshooting
+## 常见问题
 
-- **Connect fails or times out:** check the address, that both devices are on a
-  reachable network, that port 22 is allowed, and that sshd is running
-  (`Get-Service sshd` on Windows).
-- **Authentication fails:** check the key file location and its permissions
-  (`icacls` above) and the user name. On Windows, sshd logs to
-  `Get-WinEvent -LogName OpenSSH/Operational -MaxEvents 20 | Format-List TimeCreated, Message`.
-- **SSH works but the engine doesn't answer:** Zeron isn't running (steps 4–5).
-- **Tunnel refused:** make sure `sshd_config` doesn't set
-  `AllowTcpForwarding no`, then restart sshd.
-- **Connected, but the sessions list is empty or keeps loading:** the sessions
-  page shows the link state (connecting, loading sessions, or the error). Tap
-  **Details** (or **Settings → Connection Details**) for the engine version,
-  frames and rows received per stream (`WatchDevices`, `WatchSpaces`,
-  `WatchChats`, `WatchSessions`) and a link log. **Copy** puts that text on the
-  clipboard: no keys or passwords, but it names the user and host, so redact
-  those before posting it anywhere. If a stream sends nothing for 20
-  seconds, the app names it and reconnects.
-- **Zeron on the computer updated; does the app need updating too?** Usually
-  not. Unknown fields are ignored and unknown enum values (status, effort,
-  harness, …) are shown as defaults, which Details records as "read with
-  unknown values ignored". An unknown message or tool kind in a transcript
-  shows as an "Unsupported content" placeholder and the rest renders normally;
-  new notification-only messages are ignored. A row that still can't be read
-  is skipped (not deleted), and the banner and Details say how many were
-  skipped or repaired. Patch releases (0.2.97 → 0.2.98) are silent; an engine
-  whose major or minor version is newer than the app was tested with (0.3.x)
-  gets a dismissible card on the sessions page suggesting an app update. It
-  keeps working either way.
+- **Connect 失败 / 超时**：确认 IP、同一网络、防火墙 22 端口放行；`Get-Service sshd` 状态为 Running。
+- **Auth 失败**：公钥文件路径和 `icacls` 权限；用户名是否正确。可在电脑上看日志：
+  `Get-WinEvent -LogName OpenSSH/Operational -MaxEvents 20 | Format-List TimeCreated, Message`
+- **SSH 成功但引擎连不上**：Zeron 没在运行（第 4、5 步）。
+- **Windows 更新后 sshd 服务不见了**（`Get-Service sshd` 找不到服务）：用 `New-Service` 重新注册，命令见 [README.zh-CN.md 的常见问题](../README.zh-CN.md#常见问题)。
+- **sshd 禁用了端口转发**：检查 `C:\ProgramData\ssh\sshd_config` 中没有 `AllowTcpForwarding no`；修改后 `Restart-Service sshd`。
+- **连上了但会话列表是空的 / 一直在加载**：会话页顶部会显示连接状态横幅（连接中 / 正在加载会话 / 错误原因）。
+  点 **详情**（或 **设置 → 连接详情**）查看引擎版本、每个数据流（WatchDevices / WatchSpaces / WatchChats / WatchSessions）收到的帧数和行数，以及连接日志；
+  点右上角 **复制** 可把这份诊断文本（不含密钥）复制出来反馈。20 秒内有数据流一直没有数据时，会提示是哪一个并自动重连。
+- **电脑上的 Zeron 更新了，手机 App 要不要跟着更新？** 一般不用。App 对引擎版本变化做了容错：
+  多出来的字段直接忽略；不认识的状态、模型档位、harness 等取值按默认值显示，并在详情里记为"N 行忽略了未知值"；
+  对话里不认识的消息类型或工具类型显示成一条 "Unsupported content" 占位，其余内容照常显示；引擎新增的通知类消息直接忽略；
+  实在读不了的行才跳过，并在横幅和详情里提示跳过了几行。
+  补丁版本（例如 0.2.97 → 0.2.98）不提示；引擎的主/次版本比 App 测试过的新（例如 0.3.x）时，会话页顶部出现一张可关闭的提示卡，
+  建议有空时更新 App，但不影响使用。
 
-## Current limits
+## 目前的限制
 
-- No attachments (images or files) in direct mode yet.
-- The shared message queue is off: a message sent while a turn is running is
-  delivered as a steer into that turn, not queued.
-- Pins and sections are stored on the phone only.
-- Presence is shown only for the computer the engine runs on.
+- 消息可以带图片/文件附件，但要求电脑上的 Zeron ≥ 0.2.12（引擎太旧时 app 会提示先升级电脑端）。
+- 共享消息队列取决于引擎能力：支持的引擎上，会话忙时发送的消息进入共享队列；不支持的旧版本上会作为"插话（steer）"发给当前轮次。
+- 置顶和分组在手机上的编辑只保存在手机本地；电脑自己的置顶会镜像显示到手机（不写回电脑）。
+- 只显示引擎所在电脑的在线状态。

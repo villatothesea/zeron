@@ -1,12 +1,8 @@
 # Zeron for Android
 
-A Jetpack Compose client of the Rust mobile core (`crates/mobile`), laid out to follow the iOS app: Rust decides what the transcript paints and where; Android draws that display list, scrolls it, and handles gestures. Like iOS, the phone is a viewport — no agent runs on it.
+A Jetpack Compose client of the Rust mobile core (`crates/mobile`), laid out to follow the iOS app: Rust decides what the transcript paints and where; Android draws that display list, scrolls it, and handles gestures.
 
-It connects three ways, chosen under **Settings → Machines**:
-
-- **Zeron Cloud** — the synced workspace, signed in through the same WorkOS flow as iOS (`zeron://callback`).
-- **Your computers (SSH)** — SSH direct mode: the phone tunnels to an engine's loopback IPC on your own machine, no account or relay. See [`docs/ssh-direct.md`](../../docs/ssh-direct.md).
-- **Demo** — the Rust `DemoHost`, the same offline workspace as the iOS `-demo` launch. Debug builds start here.
+Debug builds start in **demo mode** (the Rust `DemoHost`, the same offline workspace as the iOS `-demo` launch). No account and no network are required. Sign-in is still on the first-run screen if you sign out, and it returns to the demo from “Explore the demo”.
 
 ## One-command build
 
@@ -17,9 +13,9 @@ export ANDROID_HOME="$HOME/Android/Sdk"   # or %LOCALAPPDATA%\Android\Sdk on Win
 scripts/android/build-apk.sh
 ```
 
-The script builds `libzeron_mobile.so` for **arm64-v8a** and **x86_64**, generates the UniFFI Kotlin bindings, applies the small Kotlin 2 compatibility patch, and runs `./gradlew :app:assembleDebug`.
+The script builds `libzeron_mobile.so` for **arm64-v8a** (add **x86_64** for an emulator with `ZERON_WITH_X86_64=1 scripts/android/build-apk.sh`), generates the UniFFI Kotlin bindings, applies the small Kotlin 2 compatibility patch, and runs `./gradlew :app:assembleDebug` (or `:app:assembleRelease` when the release signing key is available; shipped builds are the non-debuggable release variant, which scrolls much more smoothly).
 
-The debug APK is:
+The APK is (release builds: `.../apk/release/app-release.apk`):
 
 ```text
 apps/android/app/build/outputs/apk/debug/app-debug.apk
@@ -31,7 +27,7 @@ Install it on an emulator or device:
 adb install -r apps/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-x86_64 is the ABI the Windows Android Studio emulator uses. arm64-v8a is for devices and Apple Silicon emulators.
+x86_64 is the ABI the Windows Android Studio emulator uses (build it with `ZERON_WITH_X86_64=1`; release APKs ship arm64-v8a only unless `-PzeronWithX86_64=true`). arm64-v8a is for devices and Apple Silicon emulators.
 
 ### What you need
 
@@ -65,7 +61,27 @@ adb shell am start -n sh.zeron.android/.MainActivity \
   --es route settings --es theme dark
 ```
 
-`route` is `settings`, `search`, `new`, `spaces` (space-filter menu), `session` (with `--es chat <id>`), `machines`, or `signin`. `theme` is `light`, `dark`, or `system`. A fresh install defaults to dark.
+`route` is `settings`, `search`, `new`, `spaces` (space-filter menu), `session` (with `--es chat <id>`), or `signin`. `theme` is `light`, `dark`, or `system`. A fresh install defaults to dark.
+
+### Screenshots on the JVM (no emulator)
+
+`app/src/test/java/sh/zeron/android/screenshots/` renders real screens with Robolectric + Roborazzi: `MainActivity` running the Demo workspace (DemoFixture.STANDARD) through a host build of the Rust core, plus two fixture SSH machines and fixture plan usage (`ZeronModel.agentUsageSource`). Build the host library once from the repo root (Linux x86_64):
+
+```bash
+cargo build --locked -p zeron-mobile --lib --profile mobile   # -> target/mobile/libzeron_mobile.so
+```
+
+On Windows that command produces `target/mobile/zeron_mobile.dll`; copy it to `libzeron_mobile.so` in the same folder — that is the file name the test gate looks up.
+
+Then from `apps/android`:
+
+```bash
+./gradlew :app:testDebugUnitTest -PzeronScreenshots=true \
+  --tests 'sh.zeron.android.screenshots.*' \
+  -PzeronScreenshotsDir=/tmp/zeron-renders      # default: app/build/screenshots
+```
+
+It writes `01a-home-by-project.png`, `01b-home-by-activity.png` (plus `01c`/`01d` light-mode versions), `02-chat-usage-rings.png` (a live demo turn, so the pill shows the timer), `03-usage-sheet.png`, `04-settings.png`, `05-machines.png`, `06-machine-editor.png`, `07-new-session.png`, `08-working-timer.png`, `09-chat-scheduled.png` (scheduled-send chip) `10-schedule-picker.png` and `11-brand-marks.png` (every agent mark at row size) at 411×891 dp, xxhdpi, dark. Without `-PzeronScreenshots=true` (or without the host library) these tests are skipped, so the normal unit-test run stays fast. The host `.so` must match the checked-in UniFFI bindings; rebuild it after changing the core.
 
 ## Approximations
 
@@ -75,6 +91,6 @@ The front page matches the iOS sessions chrome: an “All” space filter, new-s
 
 ### Fonts and CJK
 
-`design/FontChain.kt` builds one fallback chain per face role: the bundled Geist / Geist Mono asset (Gradle packages `apps/ios/Zeron/Fonts/` directly, so both apps ship the same bytes), then the system Noto Sans CJK SC (looked up through `SystemFonts`, `wght` axis set per weight), then `sans-serif`. The same `Typeface` objects feed the Rust core's text measurer (`AndroidMeasurer`), the transcript canvas, and Compose (`ZeronType` wraps them in an `AndroidFont`), so line breaks and row heights agree with what is drawn. In monospace runs every East Asian Wide / Fullwidth cluster (UAX #11, plus wide emoji) measures and draws as exactly two cells of the mono `0` advance. The demo's CJK session (`chat-cjk`) exercises this.
+`design/FontChain.kt` builds one fallback chain per face role: the bundled Geist / Geist Mono asset (from `apps/ios/Zeron/Fonts/`), then the system Noto Sans CJK SC (looked up through `SystemFonts`, `wght` axis set per weight), then `sans-serif`. The same `Typeface` objects feed the Rust core's text measurer (`AndroidMeasurer`), the transcript canvas, and Compose (`ZeronType` wraps them in an `AndroidFont`), so line breaks and row heights agree with what is drawn. In monospace runs every East Asian Wide / Fullwidth cluster (UAX #11, plus wide emoji) measures and draws as exactly two cells of the mono `0` advance. The demo workspace has a Chinese session (`chat-zh`) with a Chinese tool group and an aligned code table to check this.
 
-Chinese input was checked with fcitx5-android (Pinyin) as the system IME: the composer rides on `WindowInsets.ime`, the candidate bar sits inside the IME inset, and a two-line draft grows the field upward.
+Chinese input was checked with fcitx5-android (Pinyin) as the system IME: the composer rides on `WindowInsets.ime`, the candidate bar sits inside the IME inset, and a two-line draft grows the field upward. See `docs/screenshots/android-parity/`.

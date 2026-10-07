@@ -78,12 +78,12 @@ object FontChain {
     }
 
     private fun build(context: Context, role: FaceRole, name: String): Typeface {
-        val plain = runCatching { Typeface.createFromAsset(context.assets, name) }.getOrElse { Typeface.DEFAULT }
+        val plain = runCatching { Typeface.createFromAsset(context.assets, "fonts/$name") }.getOrElse { Typeface.DEFAULT }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return plain
         return try {
             val weight = weightOf(role)
             val slant = if (isItalic(role)) FontStyle.FONT_SLANT_ITALIC else FontStyle.FONT_SLANT_UPRIGHT
-            val primary = Font.Builder(context.assets, name).setWeight(weight).setSlant(slant).build()
+            val primary = Font.Builder(context.assets, "fonts/$name").setWeight(weight).setSlant(slant).build()
             val builder = Typeface.CustomFallbackBuilder(FontFamily.Builder(primary).build())
             cjkFamily(weight)?.let { builder.addCustomFallback(it) }
             builder.setSystemFallback("sans-serif")

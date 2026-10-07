@@ -2,6 +2,10 @@
 
 package sh.zeron.android.ui
 
+import androidx.compose.ui.platform.testTag
+import sh.zeron.android.design.BackButton
+import sh.zeron.android.R
+import androidx.compose.ui.res.stringResource
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.background
@@ -42,6 +46,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -98,7 +104,6 @@ import sh.zeron.android.design.AssetIcon
 import sh.zeron.android.design.GaugeGlyph
 import sh.zeron.android.design.MenuEntry
 import sh.zeron.android.design.PrGlyph
-import sh.zeron.android.design.BackChevron
 import sh.zeron.android.design.BrandMark
 import sh.zeron.android.design.EllipsisMark
 import sh.zeron.android.design.LocalZeronColors
@@ -169,19 +174,38 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
     val relay = remember { FrameRelay() }
     val engine = remember(chatId) {
         TranscriptView(text, relay).also {
+            // The transcript ends with how the last turn ended (done / failed
+            // and when) once none runs.
+            it.setTurnEndMarker(true)
+            // Over a Direct link the newest rows come first; until the rest
+            // arrives the transcript is headed with "Loading earlier
+            // messages…" (scrolled to the top, that's why nothing older yet).
+            it.setHistoryMarker(true)
             it.attach(client, chatId)
             handle.setViewAttached(true)
         }
     }
     val images = remember { HashMap<String, Bitmap>() }
+    val imageFailures = remember { HashSet<String>() }
     var view by remember { mutableStateOf<TranscriptListView?>(null) }
     // Only whether the jump-to-bottom button shows, not the raw distance: a
     // state write per scrolled pixel recomposed the whole chat screen.
     var awayFromBottom by remember { mutableStateOf(false) }
+    var userMarks by remember { mutableStateOf(emptyList<UserMark>()) }
+    var activeMark by remember { mutableStateOf(-1) }
     // Unsent text survives leaving the chat and app restarts (iOS Drafts).
     val drafts = remember { context.getSharedPreferences("drafts", android.content.Context.MODE_PRIVATE) }
     var draft by remember(chatId) { mutableStateOf(drafts.getString(chatId, "") ?: "") }
     var usageOpen by remember { mutableStateOf(false) }
+    // Scheduled sends for this chat on this workspace (store ticks on change).
+    var scheduleOpen by remember { mutableStateOf(false) }
+    val scheduledTick by sh.zeron.android.schedule.ScheduledStore.changes.collectAsState()
+    val scheduled = remember(scheduledTick, chatId, model.activeMachine) {
+        sh.zeron.android.schedule.ScheduledStore(context).list().filter { it.chatId == chatId && it.workspace == model.activeMachine }
+    }
+    val notificationPermission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { }
     // Plan usage for the composer's ring (desktop AccountUsage): the engine's
     // cached probe paints at once, a forced probe follows, then every 5 min.
     var planAccounts by remember(chatId) { mutableStateOf<List<uniffi.zeron_core.AgentUsage>?>(null) }
@@ -189,9 +213,9 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
     val usageHarness = row?.harness
     LaunchedEffect(usageDevice, usageHarness) {
         if (!reportsPlanUsage(usageHarness)) return@LaunchedEffect
-        runCatching { client.listAgentUsage(usageDevice, false) }.onSuccess { planAccounts = it }
+        runCatching { model.agentUsageSource(usageDevice, false) }.onSuccess { planAccounts = it }
         while (true) {
-            runCatching { client.listAgentUsage(usageDevice, true) }.onSuccess { planAccounts = it }
+            runCatching { model.agentUsageSource(usageDevice, true) }.onSuccess { planAccounts = it }
             kotlinx.coroutines.delay(5 * 60_000L)
         }
     }
@@ -211,17 +235,43 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
     }
     var lightbox by remember { mutableStateOf<Bitmap?>(null) }
     var detail by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // A file link in a reply (report.md, /abs/path/x.md:12): previewed
+    // full screen from the chat's workspace.
+    var filePreview by remember(chatId) { mutableStateOf<String?>(null) }
     // Root-relative top of the composer stack and the screen height: the
     // transcript stops a gap above the composer (keyboard included).
     var composerTop by remember { mutableIntStateOf(0) }
     var rootHeight by remember { mutableIntStateOf(0) }
     var menuAnchor by remember { mutableStateOf(Rect.Zero) }
     var chipMenu by remember { mutableStateOf<Pair<Chip, Rect>?>(null) }
+    var attachMenu by remember { mutableStateOf<Rect?>(null) }
+    var pcFiles by remember { mutableStateOf(false) }
+    var browseFiles by remember { mutableStateOf(false) }
+    // Wide shell's right column: the workspace browser parks there instead of
+    // covering the screen. Compact shells leave the local null.
+    val sidePanel = LocalSidePanel.current
+    DisposableEffect(sidePanel) {
+        onDispose { sidePanel?.content = null }
+    }
     var headerPx by remember { mutableIntStateOf(0) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@rememberLauncherForActivityResult
-        val name = uri.lastPathSegment?.substringAfterLast('/') ?: "image.jpg"
+        val mime = context.contentResolver.getType(uri)
+        // Gallery URIs often expose only a MediaStore id as the last segment
+        // (no extension); the host jails attachment reads by file extension,
+        // so an extensionless upload can never be viewed back.
+        // 相册 URI 的 lastPathSegment 常只是媒体库数字 ID（无扩展名），
+        // 主机按扩展名放行附件读取，无扩展名的图发出去也永远显示不出来。
+        var name = runCatching {
+            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+        }.getOrNull()?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+            ?: uri.lastPathSegment?.substringAfterLast('/')
+        if (name?.substringAfterLast('.', "").isNullOrEmpty()) {
+            val ext = mime?.let { android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(it) } ?: "jpg"
+            name = "${name ?: "image"}.$ext"
+        }
         val preview = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         staged = staged + Staged(name, bytes, preview)
     }
@@ -263,13 +313,15 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
                 host.onCopy = { textToCopy ->
                     val cm = context.getSystemService(android.content.ClipboardManager::class.java)
                     cm.setPrimaryClip(android.content.ClipData.newPlainText("zeron", textToCopy))
-                    model.showToast("Copied")
+                    model.showToast(context.getString(R.string.copied))
                 }
                 host.onLink = { url ->
                     if (url.startsWith("http")) {
                         runCatching {
                             context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
                         }
+                    } else if (runCatching { uniffi.zeron_core.isFileLink(url) }.getOrDefault(false)) {
+                        filePreview = url
                     } else model.showToast(url)
                 }
                 host.onImage = { bmp -> lightbox = bmp }
@@ -280,11 +332,21 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
                 host.topFadePx = headerGapPx
                 host.topInsetPx = headerPx + headerGapPx
                 host.imageFor = { images[it] }
+                host.onImageMiss = { model.showToast(context.getString(R.string.image_unavailable)) }
                 host.requestImage = req@{ ref ->
-                    if (images.containsKey(ref) || ref.startsWith("pending:")) return@req
+                    // pending:// refs resolve from the local attachment cache,
+                    // so the photo shows in the echo while it still uploads;
+                    // failures are marked so a bad ref isn't re-fetched per frame.
+                    // pending:// 引用走本地附件缓存，回声期间就能显示图；
+                    // 失败的引用做标记，避免每帧重复拉取。
+                    if (images.containsKey(ref) || ref in imageFailures) return@req
                     scope.launch {
-                        val bytes = runCatching { client.readAttachment(chrome.host.deviceId, ref) }.getOrNull() ?: return@launch
-                        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@launch
+                        val bytes = runCatching { client.readAttachment(chrome.host.deviceId, ref) }.getOrNull()
+                        val bmp = bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+                        if (bmp == null) {
+                            imageFailures += ref
+                            return@launch
+                        }
                         images[ref] = bmp
                         host.postInvalidate()
                     }
@@ -294,6 +356,8 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
                     if (away != awayFromBottom) awayFromBottom = away
                 }
                 host.onScrollActive = { model.scrolling = it }
+                host.onUserMarks = { userMarks = it }
+                host.onActiveUserMark = { activeMark = it }
                 relay.onReady = { host.requestFrame() }
             },
         )
@@ -308,16 +372,13 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
                 .padding(horizontal = 12.dp, vertical = 4.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                Box(
-                    Modifier.size(44.dp).glassSurface(colors, 22.dp).clickable { model.back() },
-                    contentAlignment = Alignment.Center,
-                ) { BackChevron(colors.text, Modifier.size(18.dp)) }
+                BackButton(colors, onClick = { model.back() })
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                     BrandMark(row?.harness, colors, 18.dp)
                     Spacer(Modifier.width(8.dp))
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.widthIn(max = 230.dp)) {
                         Text(
-                            chrome.title.ifBlank { row?.title ?: "Session" },
+                            chrome.title.ifBlank { row?.title ?: stringResource(R.string.session_fallback) },
                             color = colors.text,
                             fontFamily = ZeronType.Sans,
                             fontWeight = FontWeight.SemiBold,
@@ -325,7 +386,7 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        val project = row?.project?.name ?: "No project"
+                        val project = row?.project?.name ?: stringResource(R.string.no_project)
                         val hostName = chrome.host.name
                         Text(
                             if (hostName != null) "$project @ $hostName" else project,
@@ -348,6 +409,14 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
         Column(
             Modifier.align(Alignment.BottomCenter).widthIn(max = 768.dp).fillMaxWidth().padding(horizontal = 16.dp).windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)).padding(bottom = 6.dp).onGloballyPositioned { composerTop = it.boundsInRoot().top.roundToInt() },
         ) {
+            scheduled.forEach { message ->
+                ScheduledChip(colors, message) {
+                    sh.zeron.android.schedule.ScheduledAlarms.cancel(context, message.id)
+                    // Give the text back if the composer is empty.
+                    if (draft.isBlank()) draft = message.text
+                    model.showToast(context.getString(sh.zeron.android.R.string.schedule_cancelled))
+                }
+            }
             StatusPill(chrome, model.connectivity, sendFailure, editingQueue != null, colors) {
                 if (editingQueue != null) {
                     editingQueue = null
@@ -374,7 +443,7 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
                     colors = colors,
                     text = draft,
                     onText = { draft = it },
-                    placeholder = if (editingQueue != null) "Edit queued message" else "Message ${row?.harness?.let { runCatching { harnessLabel(it) }.getOrNull() } ?: "the agent"}",
+                    placeholder = if (editingQueue != null) stringResource(R.string.composer_edit_queued) else stringResource(R.string.composer_placeholder, row?.harness?.let { runCatching { harnessLabel(it) }.getOrNull() } ?: stringResource(R.string.the_agent)),
                     running = running,
                     canSteer = chrome.host.capabilities.midTurnSteering == true,
                     focused = focused,
@@ -384,9 +453,14 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
                     rings = {
                         UsageRings(colors, planFraction(planAccounts, row?.harness), chrome.contextUsage, onTap = { focusManager.clearFocus(); usageOpen = true })
                     },
+                    // Text only (no images) and not while editing a queued message.
+                    onSchedule = if (staged.isEmpty() && editingQueue == null) {
+                        { focusManager.clearFocus(); scheduleOpen = true }
+                    } else null,
                     images = staged,
                     onRemoveImage = { staged = staged.filterNot { s -> s === it } },
-                    onAttach = { picker.launch("image/*") },
+                    onImageTap = { bmp -> lightbox = bmp },
+                    onAttach = { attachMenu = it },
                     onSend = send@{ mode ->
                         val body = draft.trim()
                         if (body.isEmpty() && staged.isEmpty() && mode != Delivery.Send) return@send
@@ -403,12 +477,12 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
                                         when (val start = handle.beginQueuedEdit(editing, client.deviceId())) {
                                             is QueueEditStart.Acquired -> {
                                                 val finish = handle.finishQueuedEdit(start.lease, QueueEditAction.COMMIT, body)
-                                                if (finish != QueueEditFinish.FINISHED) model.showToast("Couldn't save the edit")
+                                                if (finish != QueueEditFinish.FINISHED) model.showToast(context.getString(R.string.edit_save_failed))
                                             }
-                                            else -> model.showToast("That message isn't editable right now")
+                                            else -> model.showToast(context.getString(R.string.queued_not_editable))
                                         }
                                     } catch (t: Throwable) {
-                                        model.showToast(t.message ?: "Couldn't save the edit")
+                                        model.showToast(t.message ?: context.getString(R.string.edit_save_failed))
                                     }
                                 }
                                 editingQueue = null
@@ -430,7 +504,7 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
                             sendFailure = null
                         } catch (t: Throwable) {
                             // Kept in the pill until the next send (iOS sendFailure).
-                            sendFailure = "Couldn't send: ${t.message ?: "unknown error"}"
+                            sendFailure = context.getString(R.string.send_failed, t.message ?: context.getString(R.string.unknown_error))
                         }
                     },
                     mentionSearch = { q ->
@@ -442,6 +516,19 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
                     },
                 )
             }
+        }
+        // Message navigator (desktop MessageRail): right-middle of the
+        // transcript, between the header and the composer.
+        if (composerTop > 0 && rootHeight > 0) {
+            val topDp = with(density) { (headerPx + headerGapPx).toDp() }
+            val bottomDp = with(density) { (rootHeight - composerTop + gapPx).coerceAtLeast(0).toDp() }
+            MessageNavigator(
+                marks = userMarks,
+                active = activeMark,
+                colors = colors,
+                onPick = { view?.scrollToRow(it.key) },
+                modifier = Modifier.padding(top = topDp, bottom = bottomDp),
+            )
         }
         // iOS jump-to-latest: a 40pt glass circle 16 from the trailing edge,
         // 12 above the composer, popping in once you're away from the bottom.
@@ -471,25 +558,29 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
                 menuAnchor,
                 title = null,
                 entries = listOf(
-                    MenuEntry(if (pinned) "Unpin" else "Pin", icon = { c -> if (pinned) PinSlashGlyph(17.dp, c) else Glyph(Glyphs.Pin, 17.dp, c) }) {
+                    MenuEntry(stringResource(if (pinned) R.string.unpin else R.string.pin), icon = { c -> if (pinned) PinSlashGlyph(17.dp, c) else Glyph(Glyphs.Pin, 17.dp, c) }) {
                         model.pin(chatId, !pinned)
                     },
-                    MenuEntry("Rename…", icon = { c -> Glyph(Glyphs.Rename, 17.dp, c) }) {
+                    MenuEntry(stringResource(R.string.rename_ellipsis), icon = { c -> Glyph(Glyphs.Rename, 17.dp, c) }) {
                         renameText = chrome.title.ifBlank { current?.title ?: "" }
                         renaming = true
                     },
-                    MenuEntry("Copy Transcript", icon = { c -> Glyph(Glyphs.Copy, 17.dp, c) }) {
+                    MenuEntry(stringResource(R.string.copy_transcript), icon = { c -> Glyph(Glyphs.Copy, 17.dp, c) }) {
                         val text = runCatching { engine.frame().let { f -> try { f.plainText() } finally { f.close() } } }.getOrDefault("")
                         if (text.isBlank()) {
-                            model.showToast("Nothing to copy yet")
+                            model.showToast(context.getString(R.string.nothing_to_copy))
                         } else {
                             val cm = context.getSystemService(android.content.ClipboardManager::class.java)
                             cm.setPrimaryClip(android.content.ClipData.newPlainText("transcript", text))
-                            model.showToast("Transcript copied")
+                            model.showToast(context.getString(R.string.transcript_copied))
                         }
                     },
-                    MenuEntry("Usage", icon = { c -> GaugeGlyph(c, Modifier.size(17.dp)) }) { focusManager.clearFocus(); usageOpen = true },
-                    MenuEntry("Archive", destructive = true, icon = { c -> Glyph(Glyphs.Archive, 17.dp, c) }) {
+                    MenuEntry(stringResource(R.string.browse_files), icon = { c -> Glyph(Glyphs.Folder, 17.dp, c) }) {
+                        focusManager.clearFocus()
+                        browseFiles = true
+                    },
+                    MenuEntry(stringResource(R.string.usage), icon = { c -> GaugeGlyph(c, Modifier.size(17.dp)) }) { focusManager.clearFocus(); usageOpen = true },
+                    MenuEntry(stringResource(R.string.archive), destructive = true, icon = { c -> Glyph(Glyphs.Archive, 17.dp, c) }) {
                         model.archive(chatId)
                         model.back()
                     },
@@ -497,18 +588,97 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
                 above = false,
             ) { menu = false }
         }
+        if (scheduleOpen) {
+            ScheduleSendDialog(colors, onDismiss = { scheduleOpen = false }) { atMs ->
+                scheduleOpen = false
+                val body = draft.trim()
+                if (body.isNotEmpty()) {
+                    val message = sh.zeron.android.schedule.ScheduledMessage(
+                        workspace = model.activeMachine,
+                        chatId = chatId,
+                        text = body,
+                        atMs = atMs,
+                        chatTitle = row?.title.orEmpty(),
+                    )
+                    sh.zeron.android.schedule.ScheduledAlarms.schedule(context, message)
+                    draft = ""
+                    model.showToast(context.getString(sh.zeron.android.R.string.schedule_toast, scheduleWhenText(context, atMs)))
+                    if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                        androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                    ) {
+                        notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
+            }
+        }
         if (usageOpen) {
-            UsageSheet(colors, client, row?.deviceId ?: chrome.host.deviceId, row?.harness, chrome.contextUsage, onAccounts = { planAccounts = it }) { usageOpen = false }
+            UsageSheet(colors, model.agentUsageSource, row?.deviceId ?: chrome.host.deviceId, row?.harness, chrome.contextUsage, onAccounts = { planAccounts = it }) { usageOpen = false }
+        }
+        attachMenu?.let { anchor ->
+            // Attach: a photo from this phone (uploaded), or a reference to a
+            // file on the session's computer (inserted, not uploaded).
+            AnchoredMenu(
+                colors,
+                anchor,
+                title = null,
+                entries = listOf(
+                    MenuEntry(stringResource(R.string.attach_phone_photos), icon = { c -> AssetIcon("fileicon-files-image", 17.dp, c) }) { picker.launch("image/*") },
+                    MenuEntry(stringResource(R.string.attach_pc_files), icon = { c -> Glyph(Glyphs.Computer, 17.dp, c) }) {
+                        focusManager.clearFocus()
+                        pcFiles = true
+                    },
+                ),
+                onDismiss = { attachMenu = null },
+            )
         }
         chipMenu?.let { (chip, anchor) ->
             ChipMenu(chip, anchor, row, chrome, client, chatId, colors, model) { chipMenu = null }
+        }
+        if (pcFiles) {
+            val cwd = row?.cwd
+            PcFilePicker(model, chrome.host.deviceId, cwd, onClose = { pcFiles = false }) { paths ->
+                draft = PcFileRefs.insert(draft, paths.map { PcFileRefs.reference(cwd, it) })
+                pcFiles = false
+            }
+        }
+        if (browseFiles) {
+            val cwd = row?.cwd
+            val browser: @Composable () -> Unit = {
+                WorkspaceFilesScreen(
+                    model,
+                    deviceId = row?.deviceId ?: chrome.host.deviceId,
+                    cwd = cwd,
+                    onClose = { browseFiles = false },
+                    onPreview = { path -> filePreview = "zeron-file:" + android.net.Uri.encode(path.replace('\\', '/'), "/") },
+                    onMention = { path, dir ->
+                        draft = PcFileRefs.insert(draft, listOf(PcFileRefs.reference(cwd, path, isDir = dir)))
+                        browseFiles = false
+                    },
+                )
+            }
+            // Wide shell: park the browser in the right column; compact: cover.
+            if (sidePanel != null) {
+                SideEffect { sidePanel.content = browser }
+            } else {
+                browser()
+            }
+        } else if (sidePanel?.content != null) {
+            SideEffect { sidePanel.content = null }
+        }
+        filePreview?.let { url ->
+            FilePreview(
+                url,
+                onClose = { filePreview = null },
+                load = { client.readFileLink(chatId, url) },
+                onCopied = { model.showToast(context.getString(R.string.copied)) },
+            )
         }
         lightbox?.let { bmp ->
             Box(
                 Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.92f)).clickable { lightbox = null },
                 contentAlignment = Alignment.Center,
             ) {
-                Image(bmp.asImageBitmap(), contentDescription = "Attachment", modifier = Modifier.fillMaxWidth().padding(16.dp), contentScale = ContentScale.Fit)
+                Image(bmp.asImageBitmap(), contentDescription = stringResource(R.string.attachment), modifier = Modifier.fillMaxWidth().padding(16.dp), contentScale = ContentScale.Fit)
             }
         }
         detail?.let { (title, body) ->
@@ -516,29 +686,23 @@ fun SessionScreen(model: ZeronModel, chatId: String) {
                 onDismissRequest = { detail = null },
                 title = { Text(title) },
                 text = { Text(body, modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) },
-                confirmButton = { TextButton(onClick = { detail = null }) { Text("Close") } },
+                confirmButton = { TextButton(onClick = { detail = null }) { Text(stringResource(R.string.close)) } },
             )
         }
         if (renaming) {
+            val submit = {
+                val name = renameText.trim()
+                if (name.isNotEmpty()) model.rename(chatId, name)
+                renaming = false
+            }
             AlertDialog(
                 onDismissRequest = { renaming = false },
-                title = { Text("Rename") },
+                title = { Text(stringResource(R.string.rename)) },
                 text = {
-                    BasicTextField(
-                        value = renameText,
-                        onValueChange = { renameText = it },
-                        textStyle = TextStyle(color = colors.text, fontFamily = ZeronType.Sans, fontSize = 16.sp),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    AutoFocusNameField(renameText, colors, onChange = { renameText = it }, modifier = Modifier.fillMaxWidth(), onDone = submit)
                 },
-                confirmButton = {
-                    TextButton(onClick = {
-                        val name = renameText.trim()
-                        if (name.isNotEmpty()) model.rename(chatId, name)
-                        renaming = false
-                    }) { Text("Rename") }
-                },
-                dismissButton = { TextButton(onClick = { renaming = false }) { Text("Cancel") } },
+                confirmButton = { TextButton(onClick = submit) { Text(stringResource(R.string.rename)) } },
+                dismissButton = { TextButton(onClick = { renaming = false }) { Text(stringResource(R.string.cancel)) } },
             )
         }
     }
@@ -579,40 +743,48 @@ private fun ChipMenu(
             client.setSessionConfig(chatId, change(current))
             model.refreshPull()
         } catch (t: Throwable) {
-            model.showToast(t.message ?: "Couldn't change the session")
+            model.showToast(t.message ?: context.getString(R.string.change_session_failed))
         }
     }
     val pr = row?.pullRequest
     val (title, entries) = when (chip.id) {
-        "model" -> "Model" to models.orEmpty().map { m ->
-            MenuEntry(m.label, subtitle = m.description, checked = m.id == row?.model) { setConfig { it.copy(model = m.id) } }
+        "model" -> stringResource(R.string.model) to models.orEmpty().let { list ->
+            // The description as before; a variant without one (pi-acp sends
+            // none) names its provider when another row shares its name or
+            // model, like New Session's picker.
+            val choices = list.map { ModelChoice.of(harness, harnessLabel(harness), it) }
+            val ambiguous = ambiguousRows(choices)
+            list.zip(choices).map { (m, choice) ->
+                val subtitle = m.description?.takeIf { it.isNotBlank() } ?: choice.providerLine(ambiguous)
+                MenuEntry(m.label, subtitle = subtitle, checked = m.id == row?.model) { setConfig { it.copy(model = m.id) } }
+            }
         }
         "effort" -> {
             val all = models.orEmpty()
             val levels = all.firstOrNull { it.id == row?.model }?.reasoningLevels ?: all.firstOrNull()?.reasoningLevels ?: emptyList()
-            "Reasoning effort" to levels.map { l ->
+            stringResource(R.string.reasoning_effort) to levels.map { l ->
                 MenuEntry(reasoningLabel(l), checked = l == row?.reasoning) { setConfig { it.copy(reasoning = l) } }
             }
         }
         "pr" -> (pr?.title ?: "") to listOfNotNull(
             pr?.let { p ->
-                MenuEntry("Open Pull Request", icon = { c -> AssetIcon("tool-global", 16.dp, c) }) {
+                MenuEntry(stringResource(R.string.open_pull_request), icon = { c -> AssetIcon("tool-global", 16.dp, c) }) {
                     runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(p.url))) }
                 }
             },
             pr?.let { p ->
-                MenuEntry("Copy Link", icon = { c -> AssetIcon("fileicon-files-link", 16.dp, c) }) {
+                MenuEntry(stringResource(R.string.copy_link), icon = { c -> AssetIcon("fileicon-files-link", 16.dp, c) }) {
                     val cm = context.getSystemService(android.content.ClipboardManager::class.java)
                     cm.setPrimaryClip(android.content.ClipData.newPlainText("pull request", p.url))
-                    model.showToast("Copied")
+                    model.showToast(context.getString(R.string.copied))
                 }
             },
         )
         "branch" -> (row?.branch ?: "") to listOf(
-            MenuEntry("Copy Branch Name", icon = { c -> AssetIcon("tool-git-branch", 16.dp, c) }) {
+            MenuEntry(stringResource(R.string.copy_branch_name), icon = { c -> AssetIcon("tool-git-branch", 16.dp, c) }) {
                 val cm = context.getSystemService(android.content.ClipboardManager::class.java)
                 cm.setPrimaryClip(android.content.ClipData.newPlainText("branch", row?.branch ?: ""))
-                model.showToast("Copied")
+                model.showToast(context.getString(R.string.copied))
             },
         )
         else -> null to emptyList()
@@ -644,16 +816,24 @@ private fun StatusPill(
     }
     val progress = chrome.transferProgress
     val (dot, text) = when {
-        editing -> colors.input to "Editing queued message · Tap to cancel"
+        editing -> colors.input to stringResource(R.string.pill_editing)
         sendFailure != null -> colors.danger to sendFailure
-        chrome.sendState == SendState.FAILED -> colors.danger to "Not delivered · Tap to retry"
-        chrome.sendState == SendState.QUEUED -> colors.tertiary to "${chrome.host.name ?: "Host"} is offline — will send when it's back"
-        progress != null && progress < 1.0 -> colors.accent to "Uploading · ${Math.round(progress * 100)}%"
-        connectivity?.state == uniffi.zeron_core.ConnectivityState.OFFLINE -> colors.tertiary to "Offline — sends are saved"
-        retryAt != null -> colors.tertiary to "Reconnecting in ${((retryAt - now) / 1000).coerceAtLeast(1)}s"
+        chrome.sendState == SendState.FAILED -> colors.danger to stringResource(R.string.pill_not_delivered)
+        chrome.sendState == SendState.QUEUED -> colors.tertiary to stringResource(R.string.pill_host_offline, chrome.host.name ?: stringResource(R.string.host_fallback))
+        progress != null && progress < 1.0 -> colors.accent to stringResource(R.string.pill_uploading, Math.round(progress * 100).toInt())
+        connectivity?.state == uniffi.zeron_core.ConnectivityState.OFFLINE -> colors.tertiary to stringResource(R.string.pill_offline)
+        retryAt != null -> colors.tertiary to stringResource(R.string.pill_reconnecting, ((retryAt - now) / 1000).coerceAtLeast(1).toInt())
         chrome.queueError != null -> colors.danger to chrome.queueError!!
+        // A running turn has no pill: the transcript's own tail row (the
+        // dot-matrix and elapsed time) already says so; the pill repeated it.
         else -> return
     }
+    StatusPillView(dot, text, colors, onTap)
+}
+
+/** The pill itself: status dot + one line of text on a glass capsule. */
+@Composable
+internal fun StatusPillView(dot: Color, text: String, colors: ZeronColors, onTap: () -> Unit) {
     Row(Modifier.padding(bottom = 8.dp)) {
         Row(
             Modifier.height(30.dp).glassSurface(colors, 15.dp).clickable(onClick = onTap).padding(start = 11.dp, end = 12.dp),
@@ -676,13 +856,13 @@ private fun QueueCard(
     onEdit: (uniffi.zeron_core.QueueItem) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().glassSurface(colors, 22.dp).padding(12.dp)) {
-        Text("Queued", color = colors.secondary, fontFamily = ZeronType.Sans, fontWeight = FontWeight.Medium, fontSize = 12.sp)
+        Text(stringResource(R.string.queued), color = colors.secondary, fontFamily = ZeronType.Sans, fontWeight = FontWeight.Medium, fontSize = 12.sp)
         items.forEachIndexed { index, item ->
             // iOS QueuePanel gate labels: who holds the row, or why it waits.
             val gate = when (val g = item.gate) {
-                is uniffi.zeron_core.QueueGate.Editing -> if (g.mine) "Editing" else "Being edited"
-                is uniffi.zeron_core.QueueGate.ReviewRequired -> "Needs review"
-                null -> if (item.actionPending) "Updating" else null
+                is uniffi.zeron_core.QueueGate.Editing -> stringResource(if (g.mine) R.string.queue_editing else R.string.queue_being_edited)
+                is uniffi.zeron_core.QueueGate.ReviewRequired -> stringResource(R.string.queue_needs_review)
+                null -> if (item.actionPending) stringResource(R.string.queue_updating) else null
             }
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -693,9 +873,9 @@ private fun QueueCard(
                     Text("↑", color = if (index > 0) colors.secondary else colors.tertiary.copy(alpha = 0.4f), fontSize = 15.sp, modifier = Modifier.clickable(enabled = index > 0) { onMove(item.id, -1) }.padding(6.dp))
                     Text("↓", color = if (index < items.size - 1) colors.secondary else colors.tertiary.copy(alpha = 0.4f), fontSize = 15.sp, modifier = Modifier.clickable(enabled = index < items.size - 1) { onMove(item.id, 1) }.padding(6.dp))
                 }
-                Text("Edit", color = colors.accent, fontSize = 13.sp, modifier = Modifier.clickable { onEdit(item) }.padding(6.dp))
-                Text("Now", color = colors.text, fontSize = 13.sp, modifier = Modifier.clickable { onNow(item.id) }.padding(6.dp))
-                Text("Remove", color = colors.danger, fontSize = 13.sp, modifier = Modifier.clickable { onRemove(item.id) }.padding(6.dp))
+                Text(stringResource(R.string.edit), color = colors.accent, fontSize = 13.sp, modifier = Modifier.clickable { onEdit(item) }.padding(6.dp))
+                Text(stringResource(R.string.queue_send_now), color = colors.text, fontSize = 13.sp, modifier = Modifier.clickable { onNow(item.id) }.padding(6.dp))
+                Text(stringResource(R.string.remove), color = colors.danger, fontSize = 13.sp, modifier = Modifier.clickable { onRemove(item.id) }.padding(6.dp))
             }
         }
     }
@@ -707,7 +887,7 @@ private fun QuestionCard(questions: List<UserInputQuestion>, colors: ZeronColors
     val picks = remember(questions) { mutableMapOf<String, MutableSet<String>>() }
     val q = questions.getOrNull(page) ?: return
     Column(Modifier.fillMaxWidth().glassSurface(colors, 26.dp).padding(16.dp)) {
-        Text("${page + 1} of ${questions.size} · ${q.header}", color = colors.secondary, fontFamily = ZeronType.Sans, fontSize = 12.5.sp)
+        Text(stringResource(R.string.question_progress, page + 1, questions.size, q.header), color = colors.secondary, fontFamily = ZeronType.Sans, fontSize = 12.5.sp)
         Spacer(Modifier.height(8.dp))
         Text(q.question, color = colors.text, fontFamily = ZeronType.Sans, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
         Spacer(Modifier.height(12.dp))
@@ -736,8 +916,8 @@ private fun QuestionCard(questions: List<UserInputQuestion>, colors: ZeronColors
             )
         }
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Back", color = colors.secondary, modifier = Modifier.clickable { if (page > 0) page-- }.padding(8.dp))
-            Text(if (page == questions.lastIndex) "Send" else "Next", color = colors.text, fontWeight = FontWeight.SemiBold, modifier = Modifier.clickable {
+            Text(stringResource(R.string.back), color = colors.secondary, modifier = Modifier.clickable { if (page > 0) page-- }.padding(8.dp))
+            Text(stringResource(if (page == questions.lastIndex) R.string.send else R.string.next), color = colors.text, fontWeight = FontWeight.SemiBold, modifier = Modifier.clickable {
                 if (page < questions.lastIndex) page++ else onSubmit(finish(questions, picks))
             }.padding(8.dp))
         }
@@ -775,6 +955,7 @@ private fun ChipView(chip: Chip, colors: ZeronColors, onTap: (Rect) -> Unit) {
     Row(
         Modifier
             .onGloballyPositioned { bounds = it.boundsInRoot() }
+            .testTag("chip-${chip.id}")
             .clip(RoundedCornerShape(14.dp))
             .background(tone?.copy(alpha = 0.1f) ?: colors.controlFill)
             .clickable { onTap(bounds) }
@@ -817,12 +998,17 @@ internal fun ComposerBar(
     onChip: (Chip, Rect) -> Unit = { _, _ -> },
     images: List<Staged>,
     onRemoveImage: (Staged) -> Unit,
-    onAttach: () -> Unit = {},
+    /** Tap a staged thumbnail to preview it full-screen. */
+    onImageTap: (Bitmap) -> Unit = {},
+    /** The + button, with its bounds (root px) to anchor a menu. */
+    onAttach: (Rect) -> Unit = {},
     onSend: (Delivery) -> Unit,
     mentionSearch: suspend (String) -> List<uniffi.zeron_core.FileMatch>,
     onMention: (String, Boolean) -> Unit,
     /** Usage rings (desktop footer ring cluster), just before the send button. */
     rings: (@Composable () -> Unit)? = null,
+    /** Long-press Send → Schedule send (null when not offered). */
+    onSchedule: (() -> Unit)? = null,
 ) {
     var trailingPx by remember { mutableIntStateOf(0) }
     val trailingDp = with(androidx.compose.ui.platform.LocalDensity.current) { trailingPx.toDp() }
@@ -874,11 +1060,11 @@ internal fun ComposerBar(
                             Image(
                                 staged.preview.asImageBitmap(),
                                 contentDescription = staged.name,
-                                modifier = Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)),
+                                modifier = Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).clickable { onImageTap(staged.preview) },
                                 contentScale = ContentScale.Crop,
                             )
                         }
-                        Text("×", color = Color.White, modifier = Modifier.align(Alignment.TopEnd).clickable { onRemoveImage(staged) }.padding(2.dp))
+                        Text("×", color = Color.White, modifier = Modifier.align(Alignment.TopEnd).clickable { onRemoveImage(staged) }.padding(6.dp))
                     }
                 }
             }
@@ -916,8 +1102,9 @@ internal fun ComposerBar(
                     Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(44.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    var attachBounds by remember { mutableStateOf(Rect.Zero) }
                     Box(
-                        Modifier.size(34.dp).clip(RoundedCornerShape(17.dp)).background(colors.controlFill).clickable(onClick = onAttach),
+                        Modifier.size(34.dp).testTag("composer-attach").onGloballyPositioned { attachBounds = it.boundsInRoot() }.clip(RoundedCornerShape(17.dp)).background(colors.controlFill).clickable { onAttach(attachBounds) },
                         contentAlignment = Alignment.Center,
                     ) {
                         PlusMark(colors.text, Modifier.size(16.dp))
@@ -933,7 +1120,7 @@ internal fun ComposerBar(
                         }
                     }
                     rings?.let { Box(Modifier.padding(end = 4.dp)) { it() } }
-                    SendButton(colors, stop, has, running, canSteer, deliveryMenu, { deliveryMenu = it }, onSend)
+                    SendButton(colors, stop, has, running, canSteer, deliveryMenu, { deliveryMenu = it }, onSend, onSchedule)
                 }
             } else {
                 Row(
@@ -941,7 +1128,7 @@ internal fun ComposerBar(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     rings?.let { Box(Modifier.padding(end = 4.dp)) { it() } }
-                    SendButton(colors, stop, has, running, canSteer, deliveryMenu, { deliveryMenu = it }, onSend)
+                    SendButton(colors, stop, has, running, canSteer, deliveryMenu, { deliveryMenu = it }, onSend, onSchedule)
                 }
             }
         }
@@ -958,8 +1145,10 @@ private fun SendButton(
     deliveryMenu: Boolean,
     onMenu: (Boolean) -> Unit,
     onSend: (Delivery) -> Unit,
+    onSchedule: (() -> Unit)? = null,
 ) {
     var anchor by remember { mutableStateOf(Rect.Zero) }
+    val scheduleTitle = androidx.compose.ui.res.stringResource(sh.zeron.android.R.string.schedule_menu_entry)
     Box {
         Box(
             Modifier
@@ -969,7 +1158,11 @@ private fun SendButton(
                 .background(if (stop) colors.text else if (has) colors.accent else colors.text.copy(alpha = 0.10f))
                 .combinedClickable(
                     onClick = { onSend(if (stop) Delivery.Send else if (running && canSteer) Delivery.Steer else Delivery.Queue) },
-                    onLongClick = { if (running && has) onMenu(true) },
+                    // Mid-turn: the delivery menu (with Schedule send…);
+                    // otherwise straight to the time picker.
+                    onLongClick = {
+                        if (running && has) onMenu(true) else if (has) onSchedule?.invoke()
+                    },
                 ),
             contentAlignment = Alignment.Center,
         ) {
@@ -981,9 +1174,10 @@ private fun SendButton(
                 anchor,
                 title = null,
                 entries = listOfNotNull(
-                    MenuEntry("Queue for next turn") { onSend(Delivery.Queue) },
-                    if (canSteer) MenuEntry("Steer now") { onSend(Delivery.Steer) } else null,
-                    MenuEntry("Stop and send", destructive = true) { onSend(Delivery.Interrupt) },
+                    MenuEntry(stringResource(R.string.deliver_queue)) { onSend(Delivery.Queue) },
+                    if (canSteer) MenuEntry(stringResource(R.string.deliver_steer)) { onSend(Delivery.Steer) } else null,
+                    MenuEntry(stringResource(R.string.deliver_interrupt), destructive = true) { onSend(Delivery.Interrupt) },
+                    onSchedule?.let { MenuEntry(scheduleTitle) { it() } },
                 ),
                 above = true,
             ) { onMenu(false) }
@@ -1005,12 +1199,12 @@ fun SignInScreen(model: ZeronModel) {
             Spacer(Modifier.height(12.dp))
             Text("Zeron", color = colors.text, fontFamily = ZeronType.Sans, fontWeight = FontWeight.SemiBold, fontSize = 34.sp)
             Spacer(Modifier.height(8.dp))
-            Text("Your coding agents, from anywhere.", color = colors.secondary, fontFamily = ZeronType.Sans, fontSize = 17.sp)
+            Text(stringResource(R.string.signin_tagline), color = colors.secondary, fontFamily = ZeronType.Sans, fontSize = 17.sp)
         }
         Column {
             model.signInError?.let { Text(it, color = colors.danger, fontFamily = ZeronType.Sans, fontSize = 14.sp, modifier = Modifier.padding(bottom = 12.dp)) }
             model.authOrgs?.let { orgs ->
-                Text("Choose an organization", color = colors.text, fontFamily = ZeronType.Sans, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 8.dp))
+                Text(stringResource(R.string.choose_org), color = colors.text, fontFamily = ZeronType.Sans, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 8.dp))
                 orgs.forEach { org ->
                     Text(org.name, color = colors.text, modifier = Modifier.fillMaxWidth().clickable { model.chooseOrg(org) }.padding(vertical = 10.dp), fontFamily = ZeronType.Sans, fontSize = 16.sp)
                 }
@@ -1023,34 +1217,25 @@ fun SignInScreen(model: ZeronModel) {
                 }.padding(vertical = 15.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(if (model.signInBusy) "Signing in…" else "Sign In", color = colors.background, fontFamily = ZeronType.Sans, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
+                Text(stringResource(if (model.signInBusy) R.string.signing_in else R.string.sign_in), color = colors.background, fontFamily = ZeronType.Sans, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
             }
             Spacer(Modifier.height(12.dp))
             Box(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(colors.controlFill).clickable { model.enterDemo() }.padding(vertical = 15.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("Explore the demo", color = colors.text, fontFamily = ZeronType.Sans, fontWeight = FontWeight.Medium, fontSize = 17.sp)
+                Text(stringResource(R.string.explore_demo), color = colors.text, fontFamily = ZeronType.Sans, fontWeight = FontWeight.Medium, fontSize = 17.sp)
             }
             Spacer(Modifier.height(12.dp))
             Box(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(colors.controlFill).clickable { model.showMachines = true }.padding(vertical = 15.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("Connect to your computer (SSH)", color = colors.text, fontFamily = ZeronType.Sans, fontWeight = FontWeight.Medium, fontSize = 17.sp)
+                Text(stringResource(R.string.connect_ssh), color = colors.text, fontFamily = ZeronType.Sans, fontWeight = FontWeight.Medium, fontSize = 17.sp)
             }
         }
     }
 }
-
-private val ChatIndicator.word: String?
-    get() = when (this) {
-        ChatIndicator.WORKING -> "Working"
-        ChatIndicator.AWAITING_INPUT -> "Input"
-        ChatIndicator.ERRORED -> "Failed"
-        ChatIndicator.COMPLETED -> "Done"
-        ChatIndicator.IDLE -> null
-    }
 
 /**
  * Soft edges on a horizontally scrolling row (like iOS's scroll edge effect):

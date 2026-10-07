@@ -1,5 +1,12 @@
 package sh.zeron.android.ui
 
+import sh.zeron.android.design.BackButton
+import sh.zeron.android.design.consumeBlankTaps
+import sh.zeron.android.R
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,18 +45,20 @@ import uniffi.zeron_core.DirectPhase
 import uniffi.zeron_core.DirectStatus
 
 /** One-line state of the active machine's link, for list subtitles. */
+@Composable
 internal fun directSummary(status: DirectStatus?): String = when {
-    status == null -> "connecting…"
-    status.phase == DirectPhase.LIVE -> "connected" + (status.engineVersion?.let { " · Zeron $it" } ?: "")
-    status.phase == DirectPhase.SYNCING -> "connected · loading sessions…"
-    status.phase == DirectPhase.FAILED -> status.lastError ?: "not connected"
-    else -> "connecting…"
+    status == null -> stringResource(R.string.direct_connecting)
+    status.phase == DirectPhase.LIVE -> status.engineVersion?.let { stringResource(R.string.direct_connected_version, it) } ?: stringResource(R.string.direct_connected)
+    status.phase == DirectPhase.SYNCING -> stringResource(R.string.direct_syncing)
+    status.phase == DirectPhase.FAILED -> status.lastError ?: stringResource(R.string.direct_not_connected)
+    else -> stringResource(R.string.direct_connecting)
 }
 
+@Composable
 private fun retryLabel(status: DirectStatus): String? {
     val at = status.retryAtMs ?: return null
     val secs = ((at - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
-    return if (secs > 0) "Retrying in ${secs}s" else "Retrying…"
+    return if (secs > 0) stringResource(R.string.retrying_in, secs.toInt()) else stringResource(R.string.retrying)
 }
 
 /**
@@ -60,7 +69,6 @@ private fun retryLabel(status: DirectStatus): String? {
 internal fun DirectBanner(model: ZeronModel, colors: ZeronColors, modifier: Modifier = Modifier) {
     if (model.client?.isDirect() != true) return
     val status = model.directStatus
-    val machine = model.activeTitle()
     val skipped = status?.streams?.sumOf { it.skippedRows.toInt() } ?: 0
     val notice = status?.notice?.takeIf { status.phase == DirectPhase.LIVE && !model.noticeDismissed(it) }
     if (notice != null && skipped == 0) {
@@ -71,20 +79,16 @@ internal fun DirectBanner(model: ZeronModel, colors: ZeronColors, modifier: Modi
         ) {
             Text(notice, color = colors.secondary, fontFamily = ZeronType.Sans, fontSize = 13.sp, modifier = Modifier.weight(1f))
             Spacer(Modifier.width(8.dp))
-            Pill(colors, "OK") { model.dismissNotice(notice) }
+            Pill(colors, stringResource(R.string.ok)) { model.dismissNotice(notice) }
         }
         return
     }
-    val (title, detail, danger) = when {
-        status == null || status.phase == DirectPhase.CONNECTING ->
-            Triple("Connecting to $machine…", status?.log?.lastOrNull()?.message, false)
-        status.phase == DirectPhase.SYNCING ->
-            Triple("Connected to $machine · loading sessions…", status.lastError ?: status.log.lastOrNull()?.message, status.lastError != null)
-        status.phase == DirectPhase.FAILED ->
-            Triple("Can't load $machine", listOfNotNull(status.lastError, retryLabel(status)).joinToString("\n"), true)
-        skipped > 0 -> Triple("Some sessions couldn't be read", "$skipped row(s) from Zeron ${status.engineVersion ?: ""} were skipped. Tap Details.", false)
-        else -> return
-    }
+    // Connecting / syncing / failed live in the title-bar chip and the
+    // failure sheet now; only the engine's skipped-rows warning stays here.
+    if (status?.phase != DirectPhase.LIVE || skipped == 0) return
+    val title = stringResource(R.string.banner_skipped_title)
+    val detail = pluralStringResource(R.plurals.banner_skipped_detail, skipped, skipped, status.engineVersion ?: "")
+    val danger = false
     Column(
         modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).clip(RoundedCornerShape(14.dp)).background(colors.elevated).padding(14.dp),
     ) {
@@ -99,23 +103,24 @@ internal fun DirectBanner(model: ZeronModel, colors: ZeronColors, modifier: Modi
         }
         Spacer(Modifier.height(10.dp))
         Row {
-            Pill(colors, "Retry now") { model.retryDirect() }
+            Pill(colors, stringResource(R.string.retry_now)) { model.retryDirect() }
             Spacer(Modifier.width(8.dp))
-            Pill(colors, "Details") { model.showLinkDetails = true }
+            Pill(colors, stringResource(R.string.details)) { model.showLinkDetails = true }
             Spacer(Modifier.width(8.dp))
-            Pill(colors, "Machines") { model.showMachines = true }
+            Pill(colors, stringResource(R.string.computers)) { model.showMachines = true }
         }
     }
 }
 
 /** Text for the sessions page when there are no rows to show. */
+@Composable
 internal fun emptySessionsText(model: ZeronModel): String {
-    if (model.client?.isDirect() != true) return "No sessions yet"
+    if (model.client?.isDirect() != true) return stringResource(R.string.no_sessions_yet)
     val status = model.directStatus
     return when (status?.phase) {
-        DirectPhase.LIVE -> "No sessions on ${model.activeTitle()} yet"
-        DirectPhase.FAILED -> "Not connected"
-        else -> "Loading sessions from ${model.activeTitle()}…"
+        DirectPhase.LIVE -> stringResource(R.string.no_sessions_on, model.activeTitle())
+        DirectPhase.FAILED -> stringResource(R.string.not_connected)
+        else -> stringResource(R.string.loading_sessions_from, model.activeTitle())
     }
 }
 
@@ -124,47 +129,75 @@ internal fun emptySessionsText(model: ZeronModel): String {
 internal fun LinkDetailsScreen(model: ZeronModel) {
     val colors = LocalZeronColors.current
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     val status = model.directStatus
     val fmt = remember { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()) }
-    Column(Modifier.fillMaxSize().background(colors.background).statusBarsPadding().navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(colors.background).consumeBlankTaps().statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Close", color = colors.text, fontFamily = ZeronType.Sans, fontSize = 16.sp, modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable { model.showLinkDetails = false }.padding(8.dp))
-            Text("Connection Details", color = colors.text, fontFamily = ZeronType.Sans, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-            Text("Copy", color = colors.accent, fontFamily = ZeronType.Sans, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable {
+            BackButton(colors, onClick = { model.showLinkDetails = false })
+            Text(stringResource(R.string.connection_details), color = colors.text, fontFamily = ZeronType.Sans, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Text(stringResource(R.string.copy), color = colors.accent, fontFamily = ZeronType.Sans, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable {
                 clipboard.setText(AnnotatedString(model.linkReport()))
-                model.showToast("Copied")
+                model.showToast(context.getString(R.string.copied))
             }.padding(8.dp))
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             if (status == null) {
-                GroupLabel(colors, "Not connected to a machine")
+                GroupLabel(colors, stringResource(R.string.not_connected_machine))
                 return@Column
             }
             GroupLabel(colors, model.activeTitle())
-            val state = when (status.phase) {
-                DirectPhase.LIVE -> "Live · synced"
-                DirectPhase.SYNCING -> "Tunnel open · waiting for the workspace"
-                DirectPhase.CONNECTING -> "Connecting"
-                DirectPhase.FAILED -> listOfNotNull("Not connected", retryLabel(status)).joinToString(" · ")
+            // Down: why, in terms of this phone's network, and the fix.
+            val view = model.connectionView()
+            if (view.dot == sh.zeron.android.core.ConnectionState.Dot.FAILED && view.diagnosis != null) {
+                Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(14.dp)).background(colors.elevated).padding(14.dp).testTag("details-diagnosis")) {
+                    FailureReason(colors, view)
+                    if (view.diagnosis.opensTailscale || view.diagnosis.installsTailscale) {
+                        Spacer(Modifier.height(12.dp))
+                        TailscaleAction(model, colors, view.diagnosis)
+                    }
+                }
             }
-            SettingRow(colors, "State", state)
-            SettingRow(colors, "Zeron engine", listOfNotNull(status.engineVersion, status.engineDeviceId?.let { "device ${it.take(8)}" }).joinToString(" · ").ifEmpty { "not reached yet" })
-            status.lastError?.let { SettingRow(colors, "Last error", it) }
-            status.notice?.let { SettingRow(colors, "Note", it) }
-            GroupLabel(colors, "Streams")
+            val state = when (status.phase) {
+                DirectPhase.LIVE -> stringResource(R.string.link_live)
+                DirectPhase.SYNCING -> stringResource(R.string.link_syncing)
+                DirectPhase.CONNECTING -> stringResource(R.string.link_connecting)
+                DirectPhase.FAILED -> listOfNotNull(stringResource(R.string.not_connected), retryLabel(status)).joinToString(" · ")
+            }
+            SettingRow(colors, stringResource(R.string.link_state), state)
+            SettingRow(colors, stringResource(R.string.link_engine), listOfNotNull(status.engineVersion, status.engineDeviceId?.let { stringResource(R.string.link_device, it.take(8)) }).joinToString(" · ").ifEmpty { stringResource(R.string.link_not_reached) })
+            status.lastError?.let { SettingRow(colors, stringResource(R.string.link_last_error), it) }
+            status.notice?.let { SettingRow(colors, stringResource(R.string.link_note), it) }
+            status.clockOffsetMs?.let { SettingRow(colors, stringResource(R.string.link_clock), clockOffsetText(it)) }
+            RoutesSection(model, colors, status)
+            GroupLabel(colors, stringResource(R.string.link_streams))
+            val res = context.resources
             for (st in status.streams) {
                 val line = buildString {
-                    append("${st.frames} frames · ${st.rows} rows")
-                    if (st.skippedRows > 0u) append(" · ${st.skippedRows} skipped")
-                    if (st.repairedRows > 0u) append(" · ${st.repairedRows} read with unknown values ignored")
-                    st.lastFrameMs?.let { append(" · last ${fmt.format(java.util.Date(it))}") }
+                    append(res.getQuantityString(R.plurals.stream_frames, st.frames.toInt(), st.frames.toInt()))
+                    append(" · ")
+                    append(res.getQuantityString(R.plurals.stream_rows, st.rows.toInt(), st.rows.toInt()))
+                    if (st.skippedRows > 0u) append(" · " + res.getQuantityString(R.plurals.stream_skipped, st.skippedRows.toInt(), st.skippedRows.toInt()))
+                    if (st.repairedRows > 0u) append(" · " + res.getQuantityString(R.plurals.stream_repaired, st.repairedRows.toInt(), st.repairedRows.toInt()))
+                    st.lastFrameMs?.let { append(" · " + res.getString(R.string.stream_last, fmt.format(java.util.Date(it)))) }
                     st.error?.let { append("\n$it") }
                 }
                 SettingRow(colors, st.name, line)
             }
             val ws = model.workspace
-            SettingRow(colors, "On this phone", "${ws?.projects?.size ?: 0} projects · ${ws?.front?.recent?.size ?: 0} recent · ${ws?.archived?.size ?: 0} archived")
-            GroupLabel(colors, "Log")
+            val nProjects = ws?.projects?.size ?: 0
+            val nRecent = ws?.front?.recent?.size ?: 0
+            val nArchived = ws?.archived?.size ?: 0
+            SettingRow(
+                colors,
+                stringResource(R.string.link_on_phone),
+                listOf(
+                    pluralStringResource(R.plurals.count_projects, nProjects, nProjects),
+                    pluralStringResource(R.plurals.count_recent, nRecent, nRecent),
+                    pluralStringResource(R.plurals.count_archived, nArchived, nArchived),
+                ).joinToString(" · "),
+            )
+            GroupLabel(colors, stringResource(R.string.link_log))
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(colors.elevated).padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 for (line in status.log.asReversed()) {
                     Text("${fmt.format(java.util.Date(line.atMs))}  ${line.message}", color = colors.text, fontFamily = ZeronType.Mono, fontSize = 11.sp)
@@ -172,9 +205,67 @@ internal fun LinkDetailsScreen(model: ZeronModel) {
             }
             Spacer(Modifier.height(12.dp))
             Row {
-                Pill(colors, "Retry now", primary = true) { model.retryDirect() }
+                Pill(colors, stringResource(R.string.retry_now), primary = true) { model.retryDirect() }
             }
             Spacer(Modifier.height(40.dp))
         }
     }
+}
+
+/**
+ * Phone clock vs the computer's, from session heartbeats: within a couple of
+ * seconds reads "in sync", otherwise which side is ahead and by how much.
+ */
+@Composable
+internal fun clockOffsetText(offsetMs: Long): String {
+    val secs = kotlin.math.abs(offsetMs) / 1000
+    return when {
+        secs < 3 -> stringResource(R.string.link_clock_in_sync)
+        offsetMs > 0 -> stringResource(R.string.link_clock_phone_ahead, secs.toInt())
+        else -> stringResource(R.string.link_clock_phone_behind, secs.toInt())
+    }
+}
+
+/**
+ * Connection details > 线路 (Routes): the network the phone is on, then every
+ * address of the computer in the order it is tried, with the one in use
+ * and what each did last.
+ */
+@Composable
+private fun RoutesSection(model: ZeronModel, colors: ZeronColors, status: DirectStatus) {
+    if (status.endpoints.isEmpty()) return
+    GroupLabel(colors, stringResource(R.string.route_group))
+    SettingRow(colors, stringResource(R.string.route_network), networkText(model.network))
+    for (e in status.endpoints) {
+        val kind = sh.zeron.android.core.EndpointKind.fromWire(e.kind)
+        val title = "${kind.label()} · ${sh.zeron.android.core.Endpoint(e.host, e.port.toInt()).display()}"
+        val reason = endpointReason(e, several = status.endpoints.size > 1)
+        val detail = e.lastError?.takeIf { !e.active }
+        SettingRow(colors, title, listOfNotNull(reason, detail).joinToString("\n"))
+    }
+    Text(
+        stringResource(if (model.autoRoute) R.string.route_auto_hint else R.string.route_manual_hint),
+        color = colors.secondary, fontFamily = ZeronType.Sans, fontSize = 12.sp,
+        modifier = Modifier.padding(start = 4.dp, top = 4.dp, bottom = 4.dp),
+    )
+}
+
+/** "Wi-Fi 192.168.1.0/24 · Tailscale 已开启" ("… · Tailscale on"). */
+@Composable
+internal fun networkText(net: sh.zeron.android.core.NetworkSnapshot): String {
+    val subnet = net.localSubnets.firstOrNull()?.toString().orEmpty()
+    val where = when (net.transport) {
+        sh.zeron.android.core.NetworkSnapshot.Transport.WIFI -> stringResource(R.string.net_wifi, subnet).trim()
+        sh.zeron.android.core.NetworkSnapshot.Transport.ETHERNET -> stringResource(R.string.net_ethernet, subnet).trim()
+        sh.zeron.android.core.NetworkSnapshot.Transport.CELLULAR -> stringResource(R.string.net_cellular)
+        sh.zeron.android.core.NetworkSnapshot.Transport.NONE -> stringResource(R.string.net_none)
+        sh.zeron.android.core.NetworkSnapshot.Transport.OTHER -> stringResource(R.string.net_other)
+    }
+    val vpn = when (net.vpn) {
+        sh.zeron.android.core.NetworkSnapshot.Vpn.TAILSCALE -> stringResource(R.string.net_vpn_tailscale)
+        sh.zeron.android.core.NetworkSnapshot.Vpn.OTHER -> stringResource(R.string.net_vpn_other)
+        sh.zeron.android.core.NetworkSnapshot.Vpn.NONE -> stringResource(R.string.net_vpn_none)
+        sh.zeron.android.core.NetworkSnapshot.Vpn.UNKNOWN -> null
+    }
+    return listOfNotNull(where, vpn).joinToString(" · ")
 }
