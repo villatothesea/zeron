@@ -10,10 +10,11 @@
 //! Attachments live only on the host device — every read proxies through the
 //! owning device via `ReadAttachmentChunk`; nothing is mirrored to the edge.
 //!
-//! `read_chunk` serves transcript images back in 45KB base64 chunks. Path jail:
+//! `read_chunk` serves attachments back in 45KB base64 chunks. Path jail:
 //! only files under the uploads dir or a workspace-known chat cwd are readable
-//! (the RPC layer supplies the cwd roots) — and only supported image types, as
-//! in zeron.
+//! (the RPC layer supplies the cwd roots). Workspace files must be supported
+//! image types, as in zeron; files in the uploads dir read back whatever their
+//! type, so a queued message can restore them for editing.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -275,6 +276,14 @@ impl Uploads {
         })
     }
 
+    /// Has any chunk for `upload_id` landed? The staging dir exists from the
+    /// first `UploadChunk` until commit sweeps it, so this is the drain's
+    /// "bytes demonstrably on their way" signal — `pending://` refs without
+    /// it get the short head-of-line wait, not the full one.
+    pub fn transfer_started(&self, upload_id: &str) -> bool {
+        self.staging_dir(upload_id).is_ok_and(|dir| dir.is_dir())
+    }
+
     // ── internals ───────────────────────────────────────────────────────────
 
     fn staging_dir(&self, upload_id: &str) -> Result<PathBuf, EngineError> {
@@ -354,8 +363,21 @@ impl Uploads {
         if meta.len() > MAX_BYTES {
             return Err(EngineError::Other("Attachment is too large".into()));
         }
-        let mime_type = mime_by_ext(&resolved)
-            .ok_or_else(|| EngineError::Other("Attachment is not a supported image".into()))?;
+        // Files the user attached themselves read back whatever their type (a
+        // queued message restores them for editing); other roots stay image-only.
+        let mime_type = match mime_by_ext(&resolved).or_else(|| mime_by_magic(&resolved)) {
+            Some(mime) => mime,
+            None if std::fs::canonicalize(&self.inner.dir)
+                .is_ok_and(|uploads| resolved.starts_with(uploads)) =>
+            {
+                "application/octet-stream"
+            }
+            None => {
+                return Err(EngineError::Other(
+                    "Attachment is not a supported image".into(),
+                ));
+            }
+        };
         Ok(InspectedFile {
             name: resolved
                 .file_name()
@@ -448,6 +470,44 @@ fn mime_by_ext(path: &Path) -> Option<&'static str> {
     }
 }
 
+/// Extension-less fallback: some clients stage bytes under bare numeric
+/// names (Android MediaStore ids), so sniff the header instead.
+fn mime_by_magic(path: &Path) -> Option<&'static str> {
+    let mut head = [0u8; 16];
+    let n = std::fs::File::open(path)
+        .and_then(|mut f| std::io::Read::read(&mut f, &mut head))
+        .ok()?;
+    let head = &head[..n];
+    if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image/jpeg");
+    }
+    if head.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Some("image/png");
+    }
+    if head.starts_with(b"GIF8") {
+        return Some("image/gif");
+    }
+    if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP") {
+        return Some("image/webp");
+    }
+    if head.starts_with(b"BM") {
+        return Some("image/bmp");
+    }
+    if head.starts_with(&[0x49, 0x49, 0x2A, 0x00]) || head.starts_with(&[0x4D, 0x4D, 0x00, 0x2A])
+    {
+        return Some("image/tiff");
+    }
+    // ISOBMFF brands live at bytes 8..12 after the `ftyp` box header.
+    if head.get(4..8) == Some(b"ftyp") {
+        return match head.get(8..12)? {
+            b"avif" | b"avis" => Some("image/avif"),
+            b"heic" | b"heix" | b"hevc" | b"hevx" | b"mif1" | b"msf1" => Some("image/heic"),
+            _ => None,
+        };
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,6 +517,28 @@ mod tests {
         assert_eq!(sanitize("../../etc/passwd"), "passwd");
         assert_eq!(sanitize("my photo (1).png"), "my_photo__1_.png");
         assert_eq!(sanitize(""), "upload");
+    }
+
+    #[test]
+    fn mime_falls_back_to_magic_bytes_for_extensionless_names() {
+        // Android MediaStore ids arrive extensionless; the read path must
+        // still serve them or the transcript renders a dead gray tile.
+        let dir = tempfile::tempdir().unwrap();
+        for (bytes, mime) in [
+            (b"\xff\xd8\xff\xe1jpeg".as_slice(), "image/jpeg"),
+            (b"\x89PNG\r\n\x1a\npng".as_slice(), "image/png"),
+            (b"GIF89agif".as_slice(), "image/gif"),
+            (b"RIFFxxxxWEBPwebp".as_slice(), "image/webp"),
+            (b"BMbitmap".as_slice(), "image/bmp"),
+        ] {
+            let path = dir.path().join("1000036166");
+            std::fs::write(&path, bytes).unwrap();
+            assert_eq!(mime_by_ext(&path), None);
+            assert_eq!(mime_by_magic(&path), Some(mime));
+        }
+        let junk = dir.path().join("junk");
+        std::fs::write(&junk, b"not an image").unwrap();
+        assert_eq!(mime_by_magic(&junk), None);
     }
 
     #[test]
@@ -542,6 +624,35 @@ mod tests {
             ]
         );
         assert!(pending_refs_in("mentions pending://u1/x.png inline only").is_empty());
+    }
+
+    #[test]
+    fn uploaded_files_of_any_type_read_back_but_other_roots_stay_image_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let uploads = Uploads::from_root(dir.path());
+        for (id, name, bytes) in [
+            ("u1", "notes.md", &b"# notes"[..]),
+            ("u2", "empty.bin", b""),
+        ] {
+            uploads.append(id, &BASE64.encode(bytes), Some(0)).unwrap();
+            let path = uploads.commit(id, name).unwrap();
+            let chunk = uploads.read_chunk(&path, 0, &[]).unwrap();
+            assert_eq!(chunk.mime_type, "application/octet-stream");
+            assert!(chunk.done);
+        }
+        // A non-image in a workspace root is still refused.
+        let notes = workspace.path().join("notes.md");
+        std::fs::write(&notes, "# not an upload").unwrap();
+        assert!(
+            uploads
+                .read_chunk(
+                    notes.to_str().unwrap(),
+                    0,
+                    &[workspace.path().to_path_buf()]
+                )
+                .is_err()
+        );
     }
 
     #[test]

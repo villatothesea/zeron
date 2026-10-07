@@ -18,9 +18,10 @@ use zeron_markdown::parser::{IncrementalParser, TopBlock};
 use zeron_text::WhiteSpace;
 
 use super::display::{ColorRole, DisplayBuilder, FadeEdge, TextRun, WidgetKind};
+use super::file_icons::file_icon_asset;
 use super::markdown::{Ctx, PBlock, PText, Px, place, place_text, prepare_block, prepare_plain};
 use super::style::{Family, TYPE, Weight};
-use super::tools::{ToolGroup, place_tools};
+use super::tools::{ThoughtState, ToolGroup, place_tools};
 
 /// Row kinds the painter may style differently (e.g. context menus).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -30,6 +31,8 @@ pub enum RowKind {
     Tools,
     Chip,
     Image,
+    /// The transcript's tail status row: a running turn, or how the last
+    /// one ended.
     Working,
 }
 
@@ -49,6 +52,12 @@ pub struct TranscriptInput {
     pub working: bool,
     pub working_since_ms: Option<i64>,
     pub streaming: bool,
+    /// How the last turn ended (the tail done/failed row once none runs);
+    /// `None` shows no such row.
+    pub outcome: Option<zeron_client::TurnOutcome>,
+    /// Older rows are still on their way (`Some(bytes received so far)`):
+    /// the head row says so. `None` shows no such row.
+    pub history_pending: Option<u64>,
 }
 
 pub(crate) fn row_key(id: &str) -> u64 {
@@ -69,6 +78,8 @@ pub(crate) fn next_version() -> u64 {
 pub(crate) struct UserBubble {
     pub text: PText,
     pub images: Vec<String>,
+    /// Non-image attachments (desktop-sent ZIPs, docs): icon asset + name.
+    pub files: Vec<(String, PText)>,
     pub pending: bool,
     pub expanded: bool,
     pub more: PText,
@@ -89,6 +100,8 @@ pub(crate) enum Content {
     Chip(Chip),
     Image { reference: String },
     Working { since_ms: Option<i64>, streaming: bool },
+    TurnEnd { failed: bool, at_ms: i64 },
+    HistoryPending { received_bytes: u64 },
 }
 
 /// A width-independent row: identity, top gap class and prepared content.
@@ -129,14 +142,19 @@ pub(crate) mod geom {
     pub const BUBBLE_PAD_X: f32 = 15.0;
     pub const BUBBLE_PAD_Y: f32 = 10.0;
     pub const BUBBLE_RADIUS: f32 = 20.0;
+    /// The iOS frame's bubble ends 7px (@3x) short of the column's right edge.
+    pub const BUBBLE_TRAIL: f32 = 7.0 / 3.0;
     /// Width of a trailing overflow fade.
     pub const FADE: f32 = 28.0;
     pub const BUBBLE_FOLD_LINES: usize = 8;
     pub const BUBBLE_FOLD_SHOW: usize = 6;
     pub const THUMB: f32 = 76.0;
+    pub const FILE_PILL: f32 = 32.0;
     pub const CHIP_LINE: f32 = 32.0;
     pub const IMAGE: f32 = 260.0;
     pub const WORKING: f32 = 36.0;
+    pub const TURN_END: f32 = 28.0;
+    pub const HISTORY_PENDING: f32 = 32.0;
 }
 
 impl Gap {
@@ -171,16 +189,20 @@ struct EntryState {
 #[derive(Default)]
 pub(crate) struct RowBuilder {
     parts: HashMap<String, PartState>,
+    /// Reasoning parts' parse + prepared detail, keyed `{entry}#{part}`.
+    pub(crate) thoughts: HashMap<String, ThoughtState>,
     entries: HashMap<String, EntryState>,
     pending: HashMap<String, (String, Arc<RowCore>)>,
     working: Option<Arc<RowCore>>,
+    turn_end: Option<Arc<RowCore>>,
+    history: Option<Arc<RowCore>>,
     pub expanded: HashSet<u64>,
     pub collapsed: HashSet<u64>,
     /// Per-tool inline detail overrides (row detail key → open).
     pub detail_open: HashMap<u64, bool>,
 }
 
-fn quick_hash(s: &str) -> u64 {
+pub(crate) fn quick_hash(s: &str) -> u64 {
     // Change detector for a part's text: the whole text, so a same-length
     // rewrite is caught too. Only parts of messages that changed get here,
     // and re-parsing them is already linear in their length.
@@ -209,7 +231,7 @@ impl RowBuilder {
             let rows = match reuse {
                 Some(rows) => {
                     for part in &entry.parts {
-                        if matches!(part, MessagePart::Text { .. }) {
+                        if matches!(part, MessagePart::Text { .. } | MessagePart::Reasoning { .. }) {
                             live_parts.insert(format!("{}#{}", entry.id, part.id()));
                         }
                     }
@@ -235,6 +257,7 @@ impl RowBuilder {
         }
         self.entries.retain(|id, _| live_entries.contains(id.as_str()));
         self.parts.retain(|id, _| live_parts.contains(id));
+        self.thoughts.retain(|id, _| live_parts.contains(id));
 
         // Optimistic sends not yet echoed by the host.
         let mut live_pending = HashSet::new();
@@ -278,6 +301,44 @@ impl RowBuilder {
             }
             let core = self.working.clone().expect("set above");
             out.push(Placed { core, gap: Gap::Reply });
+        } else if let Some(outcome) = input.outcome.filter(|_| !out.is_empty() && input.pending.is_empty()) {
+            let stale = self.turn_end.as_ref().is_none_or(|w| {
+                !matches!(&w.content, Content::TurnEnd { failed, at_ms } if *failed == outcome.failed && *at_ms == outcome.at_ms)
+            });
+            if stale {
+                self.turn_end = Some(Arc::new(RowCore {
+                    key: row_key("#turn-end"),
+                    version: next_version(),
+                    kind: RowKind::Working,
+                    entry_id: Arc::from(""),
+                    content: Content::TurnEnd {
+                        failed: outcome.failed,
+                        at_ms: outcome.at_ms,
+                    },
+                    copy_text: String::new(),
+                }));
+            }
+            let core = self.turn_end.clone().expect("set above");
+            out.push(Placed { core, gap: Gap::Reply });
+        }
+        // Older rows still downloading: the head says so (scrolling up to
+        // it is where they'd be missed).
+        if let Some(received_bytes) = input.history_pending.filter(|_| !out.is_empty()) {
+            let stale = self.history.as_ref().is_none_or(|h| {
+                !matches!(&h.content, Content::HistoryPending { received_bytes: r } if *r == received_bytes)
+            });
+            if stale {
+                self.history = Some(Arc::new(RowCore {
+                    key: row_key("#history-pending"),
+                    version: next_version(),
+                    kind: RowKind::Working,
+                    entry_id: Arc::from(""),
+                    content: Content::HistoryPending { received_bytes },
+                    copy_text: String::new(),
+                }));
+            }
+            let core = self.history.clone().expect("set above");
+            out.insert(0, Placed { core, gap: Gap::First });
         }
         out
     }
@@ -367,6 +428,7 @@ impl RowBuilder {
                     if tools.iter().any(|p| matches!(p, MessagePart::Tool { call, .. } if call.is_subagent_spawn())) {
                         flush_tools(self, ctx, &mut rows, &mut tools, &mut group_ix, false);
                     }
+                    live_parts.insert(format!("{}#{}", entry.id, part.id()));
                     tools.push(part);
                 }
                 MessagePart::Reasoning { .. } => {}
@@ -472,14 +534,41 @@ impl RowBuilder {
         let key = row_key(&format!("{id}#u"));
         // Shared parser: strips the image trailer *and* hidden Appshot context.
         let parsed = zeron_client::attachments::parse_user_message(content);
-        let body = parsed.text.as_str();
-        let images: Vec<String> = parsed.images.into_iter().map(|i| i.path).collect();
         let (size, lh) = TYPE.body;
         let style = ctx.typo.style(Family::Sans, Weight::Regular, false, size);
         let lh = ctx.typo.px(lh);
-        let text = prepare_user_text(ctx, body.trim(), style, lh);
+        // Chips stand in for their attachments (as on the desktop): those
+        // leave the strip, and an image chip opens its upload on tap.
+        let mentions = zeron_proto::attachment_mentions::attachment_mentions(&parsed.text);
+        let chipped = |path: &str| mentions.iter().any(|mention| mention.names_attachment(path));
+        let previews: Vec<(u32, String)> = mentions
+            .iter()
+            .filter(|mention| mention.is_image)
+            .filter_map(|mention| {
+                let image = parsed.images.iter().find(|image| mention.names_attachment(&image.path))?;
+                Some((mention.index, image.path.clone()))
+            })
+            .collect();
+        let text = prepare_user_text(ctx, parsed.text.trim(), style, lh, &previews);
+        // Copied text reads attachment chips as their plain label.
+        let body = zeron_proto::attachment_mentions::attachment_mention_prompt(&parsed.text);
         let (msize, mlh) = TYPE.small;
         let mstyle = ctx.typo.style(Family::Sans, Weight::Medium, false, msize);
+        // Only images go to image widgets; other files (desktop-sent ZIPs)
+        // get a name pill, never an image load.
+        let (images, others): (Vec<_>, Vec<_>) = parsed
+            .images
+            .into_iter()
+            .filter(|i| !chipped(&i.path))
+            .partition(|i| zeron_proto::attachment_mentions::is_image_path(&i.path));
+        let images = images.into_iter().map(|i| i.path).collect();
+        let files = others
+            .iter()
+            .map(|f| {
+                let name = zeron_proto::attachment_mentions::attachment_display_name(&f.name);
+                (file_icon_asset(name), prepare_plain(ctx, name, mstyle, ctx.typo.px(mlh), ColorRole::Text, WhiteSpace::Pre))
+            })
+            .collect();
         let expanded = self.expanded.contains(&key);
         let more = prepare_plain(
             ctx,
@@ -497,55 +586,132 @@ impl RowBuilder {
             content: Content::User(UserBubble {
                 text,
                 images,
+                files,
                 pending,
                 expanded,
                 more,
             }),
-            copy_text: body.to_owned(),
+            copy_text: body,
         }
     }
 
 }
 
-/// User prompt text with `[name](zeron-file:path)` mentions shown as atomic
-/// accent `@name` chips (the desktop's file-chip rendering).
-fn prepare_user_text(ctx: &mut Ctx, body: &str, style: super::style::Resolved, lh: f32) -> PText {
-    let links = zeron_proto::file_mentions::file_mention_links(body);
-    if links.is_empty() {
+/// One chip in a sent prompt: its source range, label and icon, and for an
+/// image chip the link that opens its upload.
+struct UserChip {
+    range: std::ops::Range<usize>,
+    label: String,
+    icon: String,
+    open: Option<String>,
+}
+
+/// The link an image chip opens: the host attachment ref, percent-encoded.
+fn image_preview_link(reference: &str) -> String {
+    let mut out = String::from("zeron-preview://image?ref=");
+    for byte in reference.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+/// The chips a sent prompt's canonical links read as, like the desktop's:
+/// files and folders (`zeron-file:`), skills and commands (`zeron-invoke:`),
+/// and attachments (`zeron-image:` / `zeron-attachment:`), in text order.
+/// `previews` pairs image chip numbers with the uploads they open.
+fn user_chips(body: &str, previews: &[(u32, String)]) -> Vec<UserChip> {
+    let mut chips: Vec<UserChip> = zeron_proto::file_mentions::file_mention_links(body)
+        .into_iter()
+        .map(|link| UserChip {
+            icon: if link.is_dir { "fileicon-folders-folder".to_owned() } else { file_icon_asset(&link.path) },
+            range: link.range,
+            label: link.basename,
+            open: None,
+        })
+        .collect();
+    chips.extend(zeron_proto::invocation::invocation_links(body).into_iter().map(|(range, invocation)| UserChip {
+        range,
+        label: invocation.name().to_owned(),
+        icon: if invocation.prefix() == '/' { "command" } else { "wand.and.stars" }.to_owned(),
+        open: None,
+    }));
+    chips.extend(zeron_proto::attachment_mentions::attachment_mentions(body).into_iter().map(|mention| UserChip {
+        range: mention.range,
+        icon: if mention.is_image { "photo".to_owned() } else { file_icon_asset(&mention.label) },
+        open: previews
+            .iter()
+            .find(|(index, _)| mention.is_image && *index == mention.index)
+            .map(|(_, reference)| image_preview_link(reference)),
+        label: mention.label,
+    }));
+    chips.sort_by_key(|chip| chip.range.start);
+    // Links never nest; drop any overlap rather than paint two chips at once.
+    let mut end = 0;
+    chips.retain(|chip| {
+        let keep = chip.range.start >= end;
+        if keep {
+            end = chip.range.end;
+        }
+        keep
+    });
+    chips
+}
+
+/// User prompt text with its canonical links shown as atomic chips: the
+/// desktop's soft pill with an icon well, the label in the body font.
+fn prepare_user_text(ctx: &mut Ctx, body: &str, style: super::style::Resolved, lh: f32, previews: &[(u32, String)]) -> PText {
+    let chips = user_chips(body, previews);
+    if chips.is_empty() {
         return prepare_plain(ctx, body, style, lh, ColorRole::Text, WhiteSpace::PreWrap);
     }
-    let (size, _) = TYPE.body;
-    let chip = ctx.typo.style(Family::Sans, Weight::Medium, false, size);
+    // The pill sits two points inside the line box, centered like the
+    // desktop's; its icon well is the pill's height less a point each side.
+    let chip_h = lh - ctx.typo.px(4.0);
+    let chip_pad = (1.0 + (chip_h - 2.0) + ctx.typo.px(5.0), ctx.typo.px(6.0));
     let mut text = String::with_capacity(body.len());
     let mut spans = Vec::new();
     let mut paints = Vec::new();
+    let mut badges = Vec::new();
+    let mut links = Vec::new();
     let mut at = 0;
-    let mut push = |text: &mut String, piece: &str, style: zeron_text::StyleId, atomic: bool, color: ColorRole| {
+    // Returns the index of the span pushed for a non-empty piece.
+    let mut push = |text: &mut String, piece: &str, pad: (f32, f32), atomic: bool, link: Option<u16>| {
         if piece.is_empty() {
-            return;
+            return None;
         }
         let start = text.len();
         text.push_str(piece);
         spans.push(zeron_text::Span {
             range: start..text.len(),
-            style,
-            pad_start: 0.0,
-            pad_end: 0.0,
+            style: style.id,
+            pad_start: pad.0,
+            pad_end: pad.1,
             atomic,
         });
         paints.push(super::markdown::SpanPaint {
-            color,
+            color: ColorRole::Text,
             decoration: super::display::Decoration::None,
-            link: None,
+            link,
             chip: false,
         });
+        Some(spans.len() - 1)
     };
-    for link in &links {
-        push(&mut text, &body[at..link.range.start], style.id, false, ColorRole::Text);
-        push(&mut text, &format!("@{}", link.basename), chip.id, true, ColorRole::Link);
-        at = link.range.end;
+    for chip in chips {
+        push(&mut text, &body[at..chip.range.start], (0.0, 0.0), false, None);
+        let link = chip.open.map(|url| {
+            links.push(url);
+            (links.len() - 1) as u16
+        });
+        if let Some(span) = push(&mut text, &chip.label, chip_pad, true, link) {
+            badges.push((span, chip.icon));
+        }
+        at = chip.range.end;
     }
-    push(&mut text, &body[at..], style.id, false, ColorRole::Text);
+    push(&mut text, &body[at..], (0.0, 0.0), false, None);
     let p = zeron_text::prepare(
         &ctx.typo.book,
         ctx.cache,
@@ -562,8 +728,9 @@ fn prepare_user_text(ctx: &mut Ctx, body: &str, style: super::style::Resolved, l
         lh,
         base: super::style::baseline(lh, style),
         paints,
-        links: Vec::new(),
-        chip: (0.0, 0.0),
+        links,
+        chip: ((lh - chip_h) / 2.0, chip_h),
+        badges,
     }
 }
 
@@ -617,6 +784,33 @@ pub(crate) fn place_row(core: &RowCore, gap: Gap, px: Px, width: f32, mut out: O
                 out.widget(WidgetKind::Image { reference: reference.clone() }, (x, top, side, side), None);
             }
             side
+        }
+        Content::HistoryPending { received_bytes } => {
+            let h = px.v(HISTORY_PENDING);
+            if let Some(out) = out {
+                out.widget(
+                    WidgetKind::HistoryPending {
+                        received_bytes: *received_bytes,
+                    },
+                    (x, top, cw, h),
+                    None,
+                );
+            }
+            h
+        }
+        Content::TurnEnd { failed, at_ms } => {
+            let h = px.v(TURN_END);
+            if let Some(out) = out {
+                out.widget(
+                    WidgetKind::TurnEnd {
+                        failed: *failed,
+                        at_ms: *at_ms,
+                    },
+                    (x, top, cw, h),
+                    None,
+                );
+            }
+            h
         }
         Content::Working { since_ms, streaming } => {
             let h = px.v(WORKING);
@@ -677,29 +871,51 @@ fn place_user(u: &UserBubble, px: Px, x: f32, y: f32, cw: f32, out: Option<&mut 
     use geom::*;
     let pad_x = px.v(BUBBLE_PAD_X);
     let pad_y = px.v(BUBBLE_PAD_Y);
-    let max_w = (cw * 0.86).max(cw - px.v(56.0)).min(cw);
+    // iOS transcript frame: the bubble hugs its text (widest line + padding)
+    // and is right-aligned, ending BUBBLE_TRAIL short of the column edge.
+    // Wrapping uses nearly the whole column, so a long note starts ~26pt in.
+    let max_w = (cw - px.v(BUBBLE_TRAIL)).max(20.0);
     let text_w = (max_w - pad_x * 2.0).max(20.0);
     let stats = u.text.p.stats(text_w);
     let folds = stats.line_count > BUBBLE_FOLD_LINES;
     let shown = if folds && !u.expanded { BUBBLE_FOLD_SHOW } else { stats.line_count };
     let text_h = shown as f32 * u.text.lh;
     let more_h = if folds { u.more.lh + px.v(4.0) } else { 0.0 };
-    let bubble_w = if folds { max_w } else { stats.max_line_width.ceil() + pad_x * 2.0 };
+    let natural = stats.max_line_width.ceil() + pad_x * 2.0;
+    let bubble_w = if folds { max_w } else { natural.min(max_w) };
     let bubble_h = if stats.line_count == 0 { 0.0 } else { text_h + more_h + pad_y * 2.0 };
-    let thumbs_h = if u.images.is_empty() { 0.0 } else { px.v(THUMB) + if bubble_h > 0.0 { px.v(8.0) } else { 0.0 } };
+    let side = px.v(THUMB);
+    let gap = px.v(6.0);
+    let pill_h = px.v(FILE_PILL);
+    // Thumbnails row, then one pill per file, stacked above the bubble.
+    let files_y = if u.images.is_empty() { 0.0 } else { side + gap };
+    let attach_h = (files_y + u.files.len() as f32 * (pill_h + gap) - gap).max(0.0);
+    let thumbs_h = if attach_h > 0.0 { attach_h + if bubble_h > 0.0 { px.v(8.0) } else { 0.0 } } else { 0.0 };
     let h = thumbs_h + bubble_h;
     let Some(out) = out else { return h };
     // Thumbnails right-aligned above the bubble.
-    let side = px.v(THUMB);
-    let gap = px.v(6.0);
-    let mut tx = x + cw - side;
+    let mut tx = x + max_w - side;
     for img in u.images.iter().rev() {
         out.fill(tx, y, side, side, px.v(12.0), ColorRole::ChipBackground);
         out.widget(WidgetKind::Image { reference: img.clone() }, (tx, y, side, side), None);
         tx -= side + gap;
     }
+    // Files: right-aligned icon + name pills; long names fade at the edge.
+    let is = px.v(16.0);
+    let inset = px.v(10.0) + is + px.v(8.0);
+    let chrome = inset + px.v(12.0);
+    let name_w = (max_w - chrome).max(1.0);
+    let mut fy = y + files_y;
+    for (icon, name) in &u.files {
+        let pw = chrome + name.p.max_content_width().ceil().min(name_w);
+        let fx = x + cw - pw;
+        out.fill(fx, fy, pw, pill_h, px.v(12.0), ColorRole::ChipBackground);
+        out.widget(WidgetKind::Icon { name: icon.clone(), color: ColorRole::TextSoft }, (fx + px.v(10.0), fy + (pill_h - is) / 2.0, is, is), None);
+        place_text_lines(name, fx + inset, fy + (pill_h - name.lh) / 2.0, name_w, 1, px, out);
+        fy += pill_h + gap;
+    }
     if bubble_h > 0.0 {
-        let bx = x + cw - bubble_w;
+        let bx = x + max_w - bubble_w;
         let by = y + thumbs_h;
         out.fill(bx, by, bubble_w, bubble_h, px.v(BUBBLE_RADIUS).min(bubble_h / 2.0), ColorRole::UserBubble);
         place_text_lines(&u.text, bx + pad_x, by + pad_y, text_w, shown, px, out);
@@ -736,10 +952,10 @@ pub(crate) fn content_heap_bytes(content: &Content) -> usize {
     }
     match content {
         Content::Block(b) => block(b),
-        Content::User(u) => u.text.p.heap_bytes() + u.more.p.heap_bytes(),
+        Content::User(u) => u.text.p.heap_bytes() + u.more.p.heap_bytes() + u.files.iter().map(|(_, n)| n.p.heap_bytes()).sum::<usize>(),
         Content::Tools(t) => super::tools::heap_bytes(t),
         Content::Chip(c) => c.text.p.heap_bytes(),
         Content::Image { reference } => reference.len(),
-        Content::Working { .. } => 0,
+        Content::Working { .. } | Content::TurnEnd { .. } | Content::HistoryPending { .. } => 0,
     }
 }

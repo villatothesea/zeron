@@ -1,34 +1,28 @@
 //! Tool groups, laid out like the desktop transcript (`ui/src/transcript.rs`):
-//! a 26pt header (chevron on the rail's trunk, summary title), then one 32pt
-//! row per call — rail elbow, tool icon, verb, detail or file badge — each
-//! with an inline detail (invocation, output / diff / stats, thought text).
+//! a 26pt header (chevron on the rail's trunk, summary title), then one row
+//! per call. On the phone (the iOS frame) a row is two lines: the tool icon
+//! on the rail's trunk and the verb, then the argument in Geist Mono. Each row
+//! has an inline detail (invocation, output / diff / stats, thought text).
 //! Subagent spawns render as their own card group. Desktop metrics scale by
 //! [`T`] so 12pt desktop text lands on the phone's 13.5pt small size.
 
 use std::sync::Arc;
 
 use zeron_doc::parts::{MessagePart, SubagentStatus};
+use zeron_markdown::parser::{Block, BlockTree, IncrementalParser, InlineRun, InlineStyle};
 use zeron_proto::ToolCall;
 use zeron_text::WhiteSpace;
 
-use super::display::{ColorRole, DisplayBuilder, WidgetKind};
-use super::file_icons::{basename, file_icon_asset};
-use super::markdown::{Ctx, PText, Px, place_text, prepare_plain};
-use super::rows::{Content, RowBuilder, RowCore, RowKind, next_version, place_text_lines, row_key};
-use super::style::{Family, Weight};
+use super::display::{ColorRole, Decoration, DisplayBuilder, FadeEdge, WidgetKind};
+use super::file_icons::file_icon_asset;
+use super::markdown::{Ctx, PText, Px, SpanPaint, place_text, prepare_plain};
+use super::rows::{Content, RowBuilder, RowCore, RowKind, next_version, place_text_lines, quick_hash, row_key};
+use super::style::{Family, Weight, baseline};
 
 /// Desktop → phone scale (12pt tool text → 13.5pt).
 const T: f32 = 1.125;
 const HEADER_H: f32 = 26.0;
 const TOP_PAD: f32 = 2.0;
-const ROW_H: f32 = 32.0;
-const TRUNK_X: f32 = 12.5;
-const BEND: f32 = 6.0;
-const BRANCH_END: f32 = 28.0;
-const ICON_LEFT: f32 = 32.0;
-const ICON: f32 = 16.0;
-const TEXT_X: f32 = 56.0;
-const TITLE_X: f32 = 28.0;
 const OUT_LH: f32 = 18.0;
 const BODY_PAD: f32 = 6.0;
 const SEPARATOR: f32 = 1.0;
@@ -36,6 +30,26 @@ const MAX_LINES: usize = 24;
 const DIFF_MAX_LINES: usize = 600;
 const CALL_WRAP_COLS: usize = 80;
 const AGENT_ROW: f32 = 38.0;
+
+// Phone rows (the iOS tool-activity frame, measured at @3x, in points — not
+// desktop metrics, so no `T`): icon on the rail's trunk, verb on the first
+// line, the argument in Geist Mono on its own second line.
+const P_TRUNK: f32 = 14.75;
+const P_TITLE_X: f32 = 37.5;
+const P_ICON: f32 = 16.0;
+/// Row top → title line top.
+const P_TOP: f32 = 14.2;
+/// Title line top → argument line top.
+const P_ARG_DY: f32 = 21.5;
+const P_ARG_LH: f32 = 20.0;
+/// Two-line row pitch (179px @3x).
+const P_ROW: f32 = 179.0 / 3.0;
+/// Rail segments stop this far from an icon's center.
+const P_RAIL_GAP: f32 = 14.3;
+/// Chevron center → first rail segment.
+const P_RAIL_HEAD: f32 = 22.0;
+const P_ARG_SIZE: f32 = 13.0;
+const P_STATUS_SIZE: f32 = 12.0;
 const AGENT_CARD: f32 = 30.0;
 
 fn d(px: Px, v: f32) -> f32 {
@@ -49,6 +63,8 @@ pub(crate) struct ToolLine {
     /// File calls show a badge: (file-icon asset, basename).
     pub badge: Option<(String, PText)>,
     pub failed: bool,
+    /// "Failed" beside the verb when the call errored. The command stays secondary.
+    pub status: Option<PText>,
     pub running: bool,
     pub key: u64,
     pub open: bool,
@@ -68,8 +84,8 @@ pub(crate) struct ToolGroup {
 pub(crate) enum DetailBlock {
     /// Mono lines (invocation / output), single-line each, scrolling sideways.
     Lines { lines: Vec<PText>, more: Option<PText> },
-    /// Thought text, wrapped.
-    Prose(PText),
+    /// Thought markdown flattened to styled lines, wrapped at width.
+    Thought(Arc<ThoughtBody>),
     Stats(Vec<StatRow>),
     Diff { rows: Vec<DiffRowP>, notice: Option<PText>, digits: usize },
 }
@@ -144,6 +160,15 @@ fn file_path(call: &ToolCall) -> Option<&str> {
     }
 }
 
+/// `crates/ui/src/shell/transcript.rs` → `shell/transcript.rs`.
+fn short_path(path: &str) -> String {
+    let parts: Vec<&str> = path.trim_end_matches('/').rsplitn(3, '/').collect();
+    match parts.as_slice() {
+        [name, parent, _] | [name, parent] if !parent.is_empty() => format!("{parent}/{name}"),
+        _ => path.to_owned(),
+    }
+}
+
 fn wrap_cols(line: &str, cols: usize) -> Vec<String> {
     if line.chars().count() <= cols {
         return vec![line.to_owned()];
@@ -190,8 +215,13 @@ fn call_text(call: &ToolCall) -> String {
 
 struct Styles {
     label: super::style::Resolved,
+    arg: super::style::Resolved,
+    status: super::style::Resolved,
+    arg_lh: f32,
     mono: super::style::Resolved,
     mono_small: super::style::Resolved,
+    /// Detail type size in points (pre-text-scale), for thought run faces.
+    size: f32,
     lh: f32,
     out_lh: f32,
 }
@@ -317,9 +347,434 @@ fn result_block(ctx: &mut Ctx, st: &Styles, part: &MessagePart) -> Option<Detail
     lines_block(ctx, st, output.as_deref()?, None)
 }
 
+// MARK: - Thoughts (desktop `thought_lines`, engine-width wrapping)
+
+/// Flatten a parsed thought into styled logical lines — the desktop's
+/// `thought_lines`: inline markers become real styling, blocks flatten
+/// structurally (headings bold, list markers, quote bars, verbatim code
+/// lines, tables as `·`-joined rows). Desktop wraps at a char budget to keep
+/// its detail height analytic; here the text engine wraps each line at the
+/// painted width beside its gutter, so heights stay exact anyway.
+///
+/// Every logical line fills at least one visual line, so only the first `cap`
+/// can ever show: flattening stops there. Those lines are also clipped to
+/// [`THOUGHT_BYTES`], so one huge paragraph streaming in doesn't re-shape its
+/// whole text per delta either: a long thought costs the same per streamed
+/// delta as a short one. `true` = more content follows what's kept.
+fn thought_lines(tree: &BlockTree, cap: usize) -> (Vec<Vec<InlineRun>>, bool) {
+    let mut out: Vec<Vec<InlineRun>> = Vec::new();
+    for top in &tree.blocks {
+        if !out.is_empty() {
+            // One blank separator line between top-level blocks.
+            out.push(Vec::new());
+        }
+        thought_block_lines(&top.block, 0, &mut out);
+        if out.len() > cap {
+            break;
+        }
+    }
+    let mut more = out.len() > cap;
+    out.truncate(cap);
+    more |= clip_bytes(&mut out, THOUGHT_BYTES);
+    while out.last().is_some_and(|l| l.iter().all(|r| r.text.trim().is_empty())) {
+        out.pop();
+    }
+    (out, more)
+}
+
+/// Text budget for a thought's visible lines: [`MAX_LINES`] wrapped lines of
+/// real text hold well under this even at the widest iPad column, so the clip
+/// only drops text that's past the fade anyway.
+const THOUGHT_BYTES: usize = MAX_LINES * 512;
+
+/// Keep at most `budget` bytes of run text (cut at a char boundary); `true`
+/// when anything was dropped.
+fn clip_bytes(lines: &mut Vec<Vec<InlineRun>>, budget: usize) -> bool {
+    let mut left = budget;
+    for li in 0..lines.len() {
+        for ri in 0..lines[li].len() {
+            let run = &mut lines[li][ri];
+            if run.text.len() <= left {
+                left -= run.text.len();
+                continue;
+            }
+            let mut cut = left;
+            while !run.text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            run.text.truncate(cut);
+            lines[li].truncate(ri + 1);
+            lines.truncate(li + 1);
+            return true;
+        }
+    }
+    false
+}
+
+/// The indent run every line opens with; list/quote handlers rewrite it to
+/// plant markers/bars, so it exists even at zero indent.
+fn indent_run(indent: usize) -> Vec<InlineRun> {
+    vec![InlineRun { text: " ".repeat(indent), style: InlineStyle::default() }]
+}
+
+/// Append text to a line, merging into the tail run when styles match.
+fn push_styled(line: &mut Vec<InlineRun>, text: &str, style: &InlineStyle) {
+    if text.is_empty() {
+        return;
+    }
+    match line.last_mut() {
+        Some(last) if last.style == *style => last.text.push_str(text),
+        _ => line.push(InlineRun { text: text.to_owned(), style: style.clone() }),
+    }
+}
+
+/// Close a line: the indent run in front (see [`indent_run`]).
+fn finish_line(indent: usize, mut line: Vec<InlineRun>) -> Vec<InlineRun> {
+    let mut full = indent_run(indent);
+    full.append(&mut line);
+    full
+}
+
+/// One segment (between hard `\n`s) into an output line; whitespace-only
+/// segments are dropped, exactly as desktop's token wrap drops them.
+fn flush_segment(indent: usize, line: &mut Vec<InlineRun>, out: &mut Vec<Vec<InlineRun>>) {
+    if line.iter().any(|r| !r.text.trim().is_empty()) {
+        out.push(finish_line(indent, std::mem::take(line)));
+    } else {
+        line.clear();
+    }
+}
+
+/// Runs into logical lines: hard `\n`s break, wrapping is the engine's.
+fn push_runs(runs: &[InlineRun], indent: usize, out: &mut Vec<Vec<InlineRun>>) {
+    let mut line: Vec<InlineRun> = Vec::new();
+    for run in runs {
+        for (ix, piece) in run.text.split('\n').enumerate() {
+            if ix > 0 {
+                flush_segment(indent, &mut line, out);
+            }
+            if !piece.is_empty() {
+                push_styled(&mut line, piece, &run.style);
+            }
+        }
+    }
+    flush_segment(indent, &mut line, out);
+}
+
+/// One markdown block into thought detail lines, `indent` spaces deep.
+fn thought_block_lines(block: &Block, indent: usize, out: &mut Vec<Vec<InlineRun>>) {
+    match block {
+        Block::Paragraph { runs } => push_runs(runs, indent, out),
+        Block::Heading { runs, .. } => {
+            // Headings keep the detail's single type size — bold is the cue.
+            let bold: Vec<InlineRun> = runs
+                .iter()
+                .map(|r| {
+                    let mut r = r.clone();
+                    r.style.bold = true;
+                    r
+                })
+                .collect();
+            push_runs(&bold, indent, out);
+        }
+        Block::CodeBlock { code, .. } => {
+            let style = InlineStyle { code: true, ..InlineStyle::default() };
+            for line in code.lines() {
+                let mut row = indent_run(indent);
+                if !line.is_empty() {
+                    row.push(InlineRun { text: line.to_owned(), style: style.clone() });
+                }
+                out.push(row);
+            }
+        }
+        Block::List { ordered_start, items } => {
+            // Tight rendering: no blank lines inside a list.
+            for (ix, item) in items.iter().enumerate() {
+                let marker = match ordered_start {
+                    Some(start) => format!("{}. ", start + ix as u64),
+                    None => "• ".to_string(),
+                };
+                let inner = indent + marker.chars().count();
+                let mark = out.len();
+                for child in item {
+                    thought_block_lines(child, inner, out);
+                }
+                if out.len() == mark {
+                    // An empty item still shows its marker.
+                    out.push(indent_run(inner));
+                }
+                // The item's first line trades its indent spaces for the marker.
+                if let Some(first) = out[mark].first_mut() {
+                    first.text = format!("{}{marker}", " ".repeat(indent));
+                }
+            }
+        }
+        Block::BlockQuote { children } => {
+            let mark = out.len();
+            for (ix, child) in children.iter().enumerate() {
+                if ix > 0 {
+                    out.push(Vec::new());
+                }
+                thought_block_lines(child, indent + 2, out);
+            }
+            // Trade the two quote-indent spaces for the bar on every quoted
+            // line — nested list markers sit after their own deeper indent.
+            for line in &mut out[mark..] {
+                if let Some(first) = line.first_mut()
+                    && first.text.len() >= indent + 2
+                {
+                    first.text.replace_range(indent..indent + 2, "│ ");
+                }
+            }
+        }
+        Block::Table { header, rows, .. } => {
+            // A thought is a record, not a layout surface: cells joined with
+            // a dot separator, header bold — no column machinery.
+            let join = |cells: &[Vec<InlineRun>], bold: bool| -> Vec<InlineRun> {
+                let mut line: Vec<InlineRun> = Vec::new();
+                for (ix, cell) in cells.iter().enumerate() {
+                    if ix > 0 {
+                        push_styled(&mut line, " · ", &InlineStyle::default());
+                    }
+                    for r in cell {
+                        let mut r = r.clone();
+                        r.style.bold |= bold;
+                        push_styled(&mut line, &r.text, &r.style);
+                    }
+                }
+                line
+            };
+            push_runs(&join(header, true), indent, out);
+            for row in rows {
+                push_runs(&join(row, false), indent, out);
+            }
+        }
+        Block::Rule => {
+            let mut row = indent_run(indent);
+            row.push(InlineRun { text: "———".into(), style: InlineStyle::default() });
+            out.push(row);
+        }
+    }
+}
+
+/// One flattened thought line, split at its slot-0 run: the gutter (indent,
+/// list marker, quote bars) and the body the text engine wraps beside it. A
+/// wrapped body hangs under its own first word and keeps its quote bars —
+/// what desktop's re-indented char wrap draws.
+pub(crate) struct ThoughtLine {
+    /// Gutter width: the body's x offset on every visual line.
+    indent: f32,
+    /// The gutter on the first visual line (None when it's only spaces).
+    gutter: Option<PText>,
+    /// Quote bars repeated on wrapped continuation lines.
+    bars: Option<PText>,
+    /// None for a blank line (still one line box).
+    body: Option<PText>,
+}
+
+/// A thought's prepared detail: at most [`MAX_LINES`] logical lines (only
+/// those can show); `more` = content past them.
+pub(crate) struct ThoughtBody {
+    lines: Vec<ThoughtLine>,
+    more: bool,
+    lh: f32,
+}
+
+/// One reasoning part's parse and prepared detail. The parse is incremental
+/// like text parts' (the mended display tree while the part is the streaming
+/// tail, the canonical tree once settled); the prepared body is reused while
+/// its visible lines are unchanged.
+#[derive(Default)]
+pub(crate) struct ThoughtState {
+    parser: IncrementalParser,
+    /// (len, hash, live) of the last source fed to the parser.
+    source: Option<(usize, u64, bool)>,
+    lines: Vec<Vec<InlineRun>>,
+    body: Option<Arc<ThoughtBody>>,
+}
+
+/// Flattened thought lines at the detail's type size — desktop's
+/// `thought_line_text`: faint prose, semibold bold, mono code, underlined
+/// links (NOT clickable — a thought is a record, not a surface).
+fn prepare_thought(ctx: &mut Ctx, st: &Styles, lines: &[Vec<InlineRun>], more: bool) -> ThoughtBody {
+    let size = st.size;
+    let semi = ctx.typo.style(Family::Sans, Weight::Semibold, false, size);
+    let italic = ctx.typo.style(Family::Sans, Weight::Regular, true, size);
+    let semi_italic = ctx.typo.style(Family::Sans, Weight::Semibold, true, size);
+    let mono_italic = ctx.typo.style(Family::Mono, Weight::Regular, true, size);
+    let mut prepared = Vec::with_capacity(lines.len());
+    for line in lines {
+        let Some((head, runs)) = line.split_first() else {
+            prepared.push(ThoughtLine { indent: 0.0, gutter: None, bars: None, body: None });
+            continue;
+        };
+        // `Pre`: the gutter's trailing spaces are content, so they count.
+        let gutter = (!head.text.is_empty()).then(|| prepare_plain(ctx, &head.text, st.label, st.out_lh, ColorRole::TextFaint, WhiteSpace::Pre));
+        let indent = gutter.as_ref().map_or(0.0, |g| g.p.max_content_width());
+        let gutter = gutter.filter(|_| !head.text.trim().is_empty());
+        let bars = head.text.contains('│').then(|| {
+            let bars: String = head.text.chars().map(|c| if c == '│' { c } else { ' ' }).collect();
+            prepare_plain(ctx, &bars, st.label, st.out_lh, ColorRole::TextFaint, WhiteSpace::Pre)
+        });
+        if runs.iter().all(|r| r.text.trim().is_empty()) {
+            prepared.push(ThoughtLine { indent, gutter, bars, body: None });
+            continue;
+        }
+        let mut text = String::new();
+        let mut spans: Vec<zeron_text::Span> = Vec::with_capacity(runs.len());
+        let mut paints = Vec::with_capacity(runs.len());
+        for run in runs {
+            if run.text.is_empty() {
+                continue;
+            }
+            let s = &run.style;
+            let style = if s.code {
+                if s.italic { mono_italic } else { st.mono }
+            } else if s.bold {
+                if s.italic { semi_italic } else { semi }
+            } else if s.italic {
+                italic
+            } else {
+                st.label
+            };
+            let start = text.len();
+            text.push_str(&run.text);
+            spans.push(zeron_text::Span {
+                range: start..text.len(),
+                style: style.id,
+                pad_start: 0.0,
+                pad_end: 0.0,
+                atomic: false,
+            });
+            paints.push(SpanPaint {
+                color: ColorRole::TextFaint,
+                decoration: if s.strikethrough {
+                    Decoration::Strikethrough
+                } else if s.link.is_some() {
+                    Decoration::Underline
+                } else {
+                    Decoration::None
+                },
+                link: None,
+                chip: false,
+            });
+        }
+        // Code lines are verbatim (indentation, aligned spaces); prose
+        // collapses whitespace like the transcript's markdown does.
+        let verbatim = runs.iter().all(|r| r.style.code);
+        let p = zeron_text::prepare(
+            &ctx.typo.book,
+            ctx.cache,
+            &text,
+            &spans,
+            &zeron_text::PrepareOptions {
+                white_space: if verbatim { WhiteSpace::PreWrap } else { WhiteSpace::PreLine },
+                overflow_wrap: zeron_text::OverflowWrap::Anywhere,
+                ..Default::default()
+            },
+        );
+        let body = PText {
+            p,
+            lh: st.out_lh,
+            base: baseline(st.out_lh, st.label),
+            paints,
+            links: Vec::new(),
+            chip: (0.0, 0.0),
+            badges: Vec::new(),
+        };
+        prepared.push(ThoughtLine { indent, gutter, bars, body: Some(body) });
+    }
+    ThoughtBody { lines: prepared, more, lh: st.out_lh }
+}
+
+/// Visual lines a thought fills at body width `bw`, capped at
+/// [`MAX_LINES`]; `true` when content is cut (bottom fade).
+fn thought_extent(t: &ThoughtBody, bw: f32) -> (usize, bool) {
+    let mut n = 0usize;
+    for line in &t.lines {
+        n += line.visual_lines(bw);
+        if n > MAX_LINES {
+            return (MAX_LINES, true);
+        }
+    }
+    (n, t.more)
+}
+
+impl ThoughtLine {
+    fn visual_lines(&self, bw: f32) -> usize {
+        self.body.as_ref().map_or(1, |b| b.p.line_count((bw - self.indent).max(1.0)).max(1))
+    }
+}
+
+/// Paint a thought's lines from `by`: gutters, wrapped bodies beside them,
+/// quote bars down wrapped lines; cut at [`MAX_LINES`] with a bottom fade.
+fn place_thought(t: &ThoughtBody, bx: f32, by: f32, bw: f32, o: &mut DisplayBuilder) {
+    let (shown, cut) = thought_extent(t, bw);
+    let runs_before = o.runs.len();
+    let mut row = 0usize;
+    for line in &t.lines {
+        if row >= shown {
+            break;
+        }
+        let y = by + row as f32 * t.lh;
+        let n = line.visual_lines(bw);
+        if let Some(g) = &line.gutter {
+            place_text(g, bx, y, g.p.max_content_width() + 1.0, Some(o));
+        }
+        if let Some(bars) = &line.bars {
+            for k in 1..n.min(shown - row) {
+                place_text(bars, bx, y + k as f32 * t.lh, bars.p.max_content_width() + 1.0, Some(o));
+            }
+        }
+        if let Some(body) = &line.body {
+            place_text(body, bx + line.indent, y, (bw - line.indent).max(1.0), Some(o));
+        }
+        row += n;
+    }
+    if cut {
+        // Drop the overflow of a wrapped line straddling the cap.
+        let limit = by + shown as f32 * t.lh;
+        let kept: Vec<_> = o.runs.drain(runs_before..).filter(|r| r.baseline < limit).collect();
+        o.runs.extend(kept);
+        o.fade(bx, limit - t.lh, bw, t.lh, FadeEdge::Bottom);
+    }
+}
+
 // MARK: - Building
 
 impl RowBuilder {
+    /// A reasoning part's prepared detail. The parse advances incrementally
+    /// per streamed delta; flattening stops at the visible cap; preparing
+    /// (shaping) reruns only when the visible lines change.
+    fn thought_body(&mut self, ctx: &mut Ctx, st: &Styles, key: &str, text: &str, live: bool) -> Arc<ThoughtBody> {
+        let state = self.thoughts.entry(key.to_owned()).or_default();
+        let source = (text.len(), quick_hash(text), live);
+        if let (Some(body), Some(fed)) = (&state.body, state.source)
+            && fed == source
+        {
+            return body.clone();
+        }
+        state.parser.set_text(text);
+        state.source = Some(source);
+        let tree = if live { state.parser.display_tree() } else { state.parser.tree().clone() };
+        let (lines, more) = thought_lines(&tree, MAX_LINES);
+        if let Some(body) = &state.body
+            && body.more == more
+            && state.lines == lines
+        {
+            return body.clone();
+        }
+        let body = Arc::new(prepare_thought(ctx, st, &lines, more));
+        state.lines = lines;
+        state.body = Some(body.clone());
+        body
+    }
+
+    #[cfg(test)]
+    pub(crate) fn thought_body_for_test(&self, key: &str) -> Option<Arc<ThoughtBody>> {
+        self.thoughts.get(key).and_then(|s| s.body.clone())
+    }
+
     /// One group of consecutive tool / thought parts (`{msg}#g{n}`).
     pub(crate) fn tool_row(&mut self, ctx: &mut Ctx, entry_id: &str, id: &str, parts: &[&MessagePart], live: bool, agents: bool) -> RowCore {
         let key = row_key(id);
@@ -342,13 +797,20 @@ impl RowBuilder {
         let size = 12.0 * T;
         let st = Styles {
             label: ctx.typo.style(Family::Sans, Weight::Regular, false, size),
+            arg: ctx.typo.style(Family::Mono, Weight::Regular, false, P_ARG_SIZE),
+            status: ctx.typo.style(Family::Sans, Weight::Regular, false, P_STATUS_SIZE),
+            arg_lh: ctx.typo.px(P_ARG_LH),
             mono: ctx.typo.style(Family::Mono, Weight::Regular, false, size),
             mono_small: ctx.typo.style(Family::Mono, Weight::Regular, false, 11.0 * T),
+            size,
             lh: ctx.typo.px(18.0 * T),
             out_lh: ctx.typo.px(OUT_LH * T),
         };
         let medium = ctx.typo.style(Family::Sans, Weight::Medium, false, size);
-        let summary = prepare_plain(ctx, &group_summary(thoughts, &calls), st.label, st.lh, ColorRole::TextSecondary, WhiteSpace::Pre);
+        // Wraps instead of truncating: the iOS header shows the whole summary.
+        // Wrap between segments only ("1 failed" never splits).
+        let glued = group_summary(thoughts, &calls).replace(' ', "\u{a0}").replace("\u{a0}·\u{a0}", "\u{a0}· ");
+        let summary = prepare_plain(ctx, &glued, st.label, st.lh, ColorRole::TextSecondary, WhiteSpace::PreWrap);
         let mut lines = Vec::new();
         if expanded {
             let last = parts.len().saturating_sub(1);
@@ -370,13 +832,22 @@ impl RowBuilder {
                             (!*resolved, is_error)
                         };
                         let color = if *is_error { ColorRole::Danger } else { ColorRole::TextSecondary };
-                        let badge = if agents {
-                            None
-                        } else {
-                            file_path(call).map(|p| (file_icon_asset(p), prepare_plain(ctx, basename(p), st.label, st.lh, if *is_error { ColorRole::Danger } else { ColorRole::TextSoft }, WhiteSpace::Pre)))
+                        // Phone rows: no file badge — the path is the mono argument
+                        // line (parent folder + file name, like the iOS frame).
+                        let badge: Option<(String, PText)> = None;
+                        let detail_text = match file_path(call) {
+                            Some(p) if !agents => short_path(p),
+                            _ => detail.clone(),
                         };
-                        let detail_color = if agents && !*is_error { ColorRole::TextSoft } else { color };
-                        let detail = (badge.is_none() && !detail.is_empty()).then(|| prepare_plain(ctx, &detail, st.label, st.lh, detail_color, WhiteSpace::Pre));
+                        let detail = (!detail_text.is_empty()).then(|| {
+                            if agents {
+                                let c = if *is_error { color } else { ColorRole::TextSoft };
+                                prepare_plain(ctx, &detail_text, st.label, st.lh, c, WhiteSpace::Pre)
+                            } else {
+                                prepare_plain(ctx, &detail_text, st.arg, st.arg_lh, ColorRole::TextSoft, WhiteSpace::Pre)
+                            }
+                        });
+                        let status = (*is_error && !agents).then(|| prepare_plain(ctx, "Failed", st.status, st.lh, ColorRole::Danger, WhiteSpace::Pre));
                         let open = !agents && self.detail_open.get(&dkey).copied().unwrap_or(false);
                         let mut body = Vec::new();
                         if open {
@@ -389,6 +860,7 @@ impl RowBuilder {
                             detail,
                             badge,
                             failed: *is_error,
+                            status,
                             running,
                             key: dkey,
                             open,
@@ -396,10 +868,17 @@ impl RowBuilder {
                         });
                     }
                     MessagePart::Reasoning { text, .. } => {
-                        // A streaming thought opens by default (desktop).
-                        let open = self.detail_open.get(&dkey).copied().unwrap_or(live && i == last);
+                        // A streaming thought opens by default (desktop). Live
+                        // only while it is the tail of a streaming reply:
+                        // once anything follows, the thought is finished even
+                        // though the entry still streams.
+                        let tail = live && i == last;
+                        let open = self.detail_open.get(&dkey).copied().unwrap_or(tail);
                         let body = if open && !text.trim().is_empty() {
-                            vec![DetailBlock::Prose(prepare_plain(ctx, text.trim(), st.label, st.out_lh, ColorRole::TextFaint, WhiteSpace::PreWrap))]
+                            // Same parse wiring as text parts: incremental while
+                            // streaming, inline markers mended for display, the
+                            // canonical tree once settled.
+                            vec![DetailBlock::Thought(self.thought_body(ctx, &st, &format!("{entry_id}#{}", part.id()), text, tail))]
                         } else {
                             Vec::new()
                         };
@@ -409,6 +888,7 @@ impl RowBuilder {
                             detail: None,
                             badge: None,
                             failed: false,
+                            status: None,
                             running: false,
                             key: dkey,
                             open,
@@ -436,86 +916,85 @@ pub(crate) fn place_tools(t: &ToolGroup, px: Px, x: f32, y: f32, cw: f32, mut ou
     if t.agents {
         return place_agents(t, px, x, y, cw, out);
     }
-    let hh = d(px, HEADER_H);
+    let base_hh = d(px, HEADER_H);
+    let trunk = x + px.v(P_TRUNK);
+    let tx = x + px.v(P_TITLE_X);
+    let tw = (cw - px.v(P_TITLE_X) - d(px, 4.0)).max(1.0);
+    let summary_lines = t.summary.p.line_count(tw).max(1);
+    let hh = base_hh + (summary_lines - 1) as f32 * t.summary.lh;
+    let chevron_cy = y + base_hh / 2.0;
     if let Some(o) = out.as_deref_mut() {
         let cs = d(px, 14.0);
-        o.widget(WidgetKind::Chevron { expanded: t.expanded }, (x + d(px, TRUNK_X) - cs / 2.0, y + (hh - cs) / 2.0, cs, cs), None);
-        let tx = x + d(px, TITLE_X);
-        let tw = (cw - d(px, TITLE_X) - d(px, 4.0)).max(1.0);
+        o.widget(WidgetKind::Chevron { expanded: t.expanded }, (trunk - cs / 2.0, chevron_cy - cs / 2.0, cs, cs), None);
         let sw = t.summary.p.max_content_width().min(tw);
-        let ty = y + (hh - t.summary.lh) / 2.0;
-        place_text_lines(&t.summary, tx, ty, tw, 1, px, o);
+        let ty = y + (base_hh - t.summary.lh) / 2.0;
+        place_text_lines(&t.summary, tx, ty, tw, summary_lines, px, o);
         if t.live {
-            o.widget(WidgetKind::Shimmer, (tx, ty, sw, t.summary.lh), None);
+            o.widget(WidgetKind::Shimmer, (tx, ty, sw, t.summary.lh * summary_lines as f32), None);
         }
-        o.widget(WidgetKind::Disclosure { expanded: t.expanded }, (x, y, (d(px, TITLE_X) + sw + d(px, 12.0)).min(cw), hh), None);
+        o.widget(WidgetKind::Disclosure { expanded: t.expanded }, (x, y, (px.v(P_TITLE_X) + sw + d(px, 12.0)).min(cw), hh), None);
     }
     if !t.expanded || t.lines.is_empty() {
         return hh;
     }
-    let row_h = d(px, ROW_H);
     let mut ry = y + hh + d(px, TOP_PAD);
-    let mut tops = Vec::with_capacity(t.lines.len());
-    let mut heights = Vec::with_capacity(t.lines.len());
-    let bx = x + d(px, TEXT_X);
-    let bw = (cw - d(px, TEXT_X)).max(1.0);
-    for line in &t.lines {
+    let bx = tx;
+    let bw = (cw - px.v(P_TITLE_X)).max(1.0);
+    // Rail: 1pt segments on the trunk between the chevron and each icon,
+    // interrupted around the icons (no elbows on the phone).
+    let mut prev_bottom = chevron_cy + px.v(P_RAIL_HEAD);
+    let rail_w = px.v(1.0);
+    let n = t.lines.len();
+    for (i, line) in t.lines.iter().enumerate() {
+        let row_h = line_height(line, px);
+        let title_cy = ry + px.v(P_TOP) + line.label.lh / 2.0;
         if let Some(o) = out.as_deref_mut() {
+            let top = title_cy - px.v(P_RAIL_GAP);
+            if top > prev_bottom {
+                o.fill(trunk - rail_w / 2.0, prev_bottom, rail_w, top - prev_bottom, 0.0, ColorRole::ToolRail);
+            }
             place_line_header(line, px, x, ry, cw, o);
         }
         let body = place_body(line, px, bx, ry + row_h, bw, out.as_deref_mut());
-        tops.push(ry - y);
-        heights.push(row_h + body);
+        prev_bottom = title_cy + px.v(P_RAIL_GAP);
         ry += row_h + body;
-    }
-    if let Some(o) = out {
-        o.widget(
-            WidgetKind::ToolRail {
-                trunk_x: d(px, TRUNK_X),
-                bend: d(px, BEND),
-                branch_end: d(px, BRANCH_END),
-                row_mid: row_h / 2.0,
-                tops,
-                heights,
-            },
-            (x, y, d(px, TEXT_X), ry - y),
-            None,
-        );
+        if i + 1 == n && body > 0.0 {
+            if let Some(o) = out.as_deref_mut() {
+                o.fill(trunk - rail_w / 2.0, prev_bottom, rail_w, (ry - prev_bottom).max(0.0), 0.0, ColorRole::ToolRail);
+            }
+        }
     }
     ry - y
 }
 
+/// Two lines (verb, then the mono argument) or one when there is no argument.
+fn line_height(line: &ToolLine, px: Px) -> f32 {
+    if line.detail.is_some() {
+        px.v(P_ROW)
+    } else {
+        px.v(P_ROW - P_ARG_DY)
+    }
+}
+
 fn place_line_header(line: &ToolLine, px: Px, x: f32, ry: f32, cw: f32, o: &mut DisplayBuilder) {
-    let row_h = d(px, ROW_H);
-    let is = d(px, ICON);
+    let row_h = line_height(line, px);
+    let is = px.v(P_ICON);
+    let title_y = ry + px.v(P_TOP);
+    let title_cy = title_y + line.label.lh / 2.0;
     let icon_color = if line.failed { ColorRole::Danger } else { ColorRole::TextSecondary };
-    o.widget(WidgetKind::Icon { name: line.icon.clone(), color: icon_color }, (x + d(px, ICON_LEFT), ry + (row_h - is) / 2.0, is, is), None);
-    let tx = x + d(px, TEXT_X);
+    o.widget(WidgetKind::Icon { name: line.icon.clone(), color: icon_color }, (x + px.v(P_TRUNK) - is / 2.0, title_cy - is / 2.0, is, is), None);
+    let tx = x + px.v(P_TITLE_X);
     let lw = line.label.p.max_content_width();
-    place_text(&line.label, tx, ry + (row_h - line.label.lh) / 2.0, lw + 1.0, Some(o));
-    let dx = tx + lw + d(px, 8.0);
-    let avail = (x + cw - dx).max(0.0);
-    if let Some((asset, name)) = &line.badge {
-        let bh = d(px, 22.0);
-        let by = ry + (row_h - bh) / 2.0;
-        let nw = name.p.max_content_width();
-        let bw = (d(px, 1.0 + 20.0 + 6.0 + 6.0) + nw).min(avail);
-        if bw > d(px, 34.0) {
-            o.fill(dx, by, bw, bh, d(px, 5.0), ColorRole::ToolBadge);
-            let well = d(px, 20.0);
-            o.fill(dx + d(px, 1.0), by + d(px, 1.0), well, well, d(px, 4.0), ColorRole::ToolWell);
-            let fs = d(px, 14.0);
-            o.widget(
-                WidgetKind::Icon { name: asset.clone(), color: ColorRole::TextSoft },
-                (dx + d(px, 1.0) + (well - fs) / 2.0, by + d(px, 1.0) + (well - fs) / 2.0, fs, fs),
-                None,
-            );
-            place_text_lines(name, dx + d(px, 27.0), ry + (row_h - name.lh) / 2.0, (bw - d(px, 33.0)).max(1.0), 1, px, o);
-        }
-    } else if let Some(detail) = &line.detail {
-        if avail > 1.0 {
-            place_text_lines(detail, dx, ry + (row_h - detail.lh) / 2.0, avail, 1, px, o);
-        }
+    place_text(&line.label, tx, title_y, lw + 1.0, Some(o));
+    if let Some(status) = &line.status {
+        let sw = status.p.max_content_width();
+        // Share the verb's baseline.
+        let sy = title_y + line.label.base - status.base;
+        place_text(status, tx + lw + d(px, 6.0), sy, sw + 1.0, Some(o));
+    }
+    if let Some(detail) = &line.detail {
+        let avail = (x + cw - tx).max(1.0);
+        place_text_lines(detail, tx, title_y + px.v(P_ARG_DY), avail, 1, px, o);
     }
     o.widget(WidgetKind::ToolToggle { detail: line.key, open: line.open }, (x, ry, cw, row_h), None);
 }
@@ -554,12 +1033,12 @@ fn place_block(block: &DetailBlock, px: Px, bx: f32, by: f32, bw: f32, out: Opti
             }
             h
         }
-        DetailBlock::Prose(p) => {
-            let shown = p.p.line_count(bw).min(MAX_LINES);
+        DetailBlock::Thought(t) => {
+            let (shown, _) = thought_extent(t, bw);
             if let Some(o) = out {
-                place_text_lines(p, bx, by + pad, bw, MAX_LINES, px, o);
+                place_thought(t, bx, by + pad, bw, o);
             }
-            pad * 2.0 + shown as f32 * p.lh
+            pad * 2.0 + shown as f32 * t.lh
         }
         DetailBlock::Stats(rows) => {
             let h = pad * 2.0 + rows.len() as f32 * lh;
@@ -682,13 +1161,20 @@ pub(crate) fn heap_bytes(t: &ToolGroup) -> usize {
             .iter()
             .map(|l| {
                 l.label.p.heap_bytes()
+                    + l.status.as_ref().map_or(0, |s| s.p.heap_bytes())
                     + l.detail.as_ref().map_or(0, |d| d.p.heap_bytes())
                     + l.badge.as_ref().map_or(0, |b| b.1.p.heap_bytes())
                     + l.body
                         .iter()
                         .map(|b| match b {
                             DetailBlock::Lines { lines, .. } => lines.iter().map(|p| p.p.heap_bytes()).sum(),
-                            DetailBlock::Prose(p) => p.p.heap_bytes(),
+                            DetailBlock::Thought(t) => t
+                                .lines
+                                .iter()
+                                .flat_map(|l| [&l.gutter, &l.bars, &l.body])
+                                .flatten()
+                                .map(|p| p.p.heap_bytes())
+                                .sum::<usize>(),
                             DetailBlock::Stats(rows) => rows.iter().map(|r| r.path.p.heap_bytes()).sum(),
                             DetailBlock::Diff { rows, .. } => rows.iter().map(|r| r.text.p.heap_bytes()).sum(),
                         })
@@ -700,6 +1186,32 @@ pub(crate) fn heap_bytes(t: &ToolGroup) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thought_lines_stop_at_the_visible_cap() {
+        use zeron_markdown::parser::parse_full;
+        let long: String = (0..100).map(|i| format!("para {i}\n\n")).collect();
+        let (lines, more) = thought_lines(&parse_full(&long), MAX_LINES);
+        assert!(more && lines.len() <= MAX_LINES && lines.len() >= MAX_LINES - 1, "{}", lines.len());
+        let (lines, more) = thought_lines(&parse_full("one\n\n- two\n\n```\n  three\n```"), MAX_LINES);
+        let text: Vec<String> = lines.iter().map(|l| l.iter().map(|r| r.text.as_str()).collect()).collect();
+        assert_eq!(text, ["one", "", "• two", "", "  three"]);
+        assert!(!more);
+    }
+
+    #[test]
+    fn thought_lines_clip_one_huge_paragraph_to_the_byte_budget() {
+        use zeron_markdown::parser::parse_full;
+        let bytes = |lines: &[Vec<InlineRun>]| lines.iter().flatten().map(|r| r.text.len()).sum::<usize>();
+        let (lines, more) = thought_lines(&parse_full(&"word ".repeat(20_000)), MAX_LINES);
+        assert!(more && bytes(&lines) <= THOUGHT_BYTES && bytes(&lines) > THOUGHT_BYTES - 8, "{}", bytes(&lines));
+        // The budget lands inside a two-byte char: cut on its boundary.
+        let (lines, more) = thought_lines(&parse_full(&format!("a{}", "é".repeat(THOUGHT_BYTES))), MAX_LINES);
+        assert!(more && bytes(&lines) == THOUGHT_BYTES - 1, "{}", bytes(&lines));
+        // Under budget: untouched.
+        let (lines, more) = thought_lines(&parse_full("short thought"), MAX_LINES);
+        assert!(!more && bytes(&lines) == "short thought".len());
+    }
 
     #[test]
     fn summary_matches_desktop_wording() {

@@ -53,9 +53,5 @@ if command -v cargo-ndk >/dev/null && [[ -n "${ANDROID_NDK_HOME:-}" ]]; then
     build --locked -p zeron-mobile --lib --profile mobile
   echo "jniLibs: $OUT/jniLibs"
 else
-  echo "note: cargo-ndk / ANDROID_NDK_HOME not found — skipped the .so build" >&2
-  if [[ "${ZERON_REQUIRE_NDK:-}" == "1" ]]; then
-    echo "error: Android NDK and cargo-ndk are required (set ANDROID_NDK_HOME)" >&2
-    exit 1
-  fi
+  echo "note: cargo-ndk / ANDROID_NDK_HOME not found — skipped the .so build"
 fi

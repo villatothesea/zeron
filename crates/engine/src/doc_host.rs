@@ -31,8 +31,8 @@ use tokio_util::task::TaskTracker;
 use zeron_doc::{
     COMMAND_DEFAULT_TTL_MS, CommandBasedOn, CommandDisposition, DocError, EvaluationContext,
     MessagePart, MessageRole, MessageStatus, QueueDeliveryGate, QueuedMessage, SessionCommandEntry,
-    SessionCommandPayload, SessionCommandStatus, SessionDoc, SessionMessageEntry, evaluate_command,
-    join_continuation_entries,
+    SessionCommandPayload, SessionCommandStatus, SessionDoc, SessionMessageEntry, SubagentStatus,
+    evaluate_command, join_continuation_entries,
 };
 use zeron_proto::{ConversationSourceContext, HarnessId, UserInputAnswer, UserInputQuestion};
 use zeron_sync::DocsStore;
@@ -105,6 +105,15 @@ const ATTACHMENT_WAIT_MAX_MS: i64 = ATTACHMENT_WAIT_MAX.as_millis() as i64;
 /// (the happy path is event-driven — UploadCommit kicks the drain — this
 /// timer only covers the give-up transition and missed kicks).
 const ATTACHMENT_WAIT_RECHECK: std::time::Duration = std::time::Duration::from_secs(30);
+/// Head-of-line bound when NO chunk of a missing ref has ever landed here:
+/// a real uploader lands its first chunk within seconds of the command
+/// showing up (bytes are staged before the command is written), so a
+/// command that still has zero staging after this window is waiting on a
+/// client that can't or won't send — an old client, a backend without
+/// attachment support, a dead app. It gets rejected and the queue moves;
+/// it must NOT sit for the full in-transit window starving every command
+/// behind it.
+const NO_UPLOAD_WAIT_MS: i64 = 3 * 60_000;
 
 /// Transfer attempt outcome: transient failures retry (the link may heal),
 /// permanent ones stop (the host actively refused, or the bytes are gone).
@@ -262,6 +271,11 @@ struct DocHostInner {
     /// deferred on in-transit attachment bytes re-checks on a cadence, and
     /// each deferral must not stack another timer.
     drain_waiting: Mutex<HashSet<String>>,
+    /// Command id → when THIS host first saw it missing attachment bytes.
+    /// The wait caps are measured on this clock — `issued_at` comes from
+    /// the issuing client and can be minutes off (or ahead), which would
+    /// either expire the wait instantly or stretch it past every bound.
+    missing_since: Mutex<HashMap<String, i64>>,
     /// Uploads store (engine assembly) — resolves `pending://` attachment
     /// refs and jails transfer reads to the uploads dir.
     uploads: OnceLock<crate::uploads::Uploads>,
@@ -409,9 +423,7 @@ impl ChatConnectionSnapshot {
             sync_requested,
             stats: client.as_ref().map(|client| client.stats()),
             delivery_live: sync_started
-                && client
-                    .as_ref()
-                    .is_some_and(|client| client.delivery_live()),
+                && client.as_ref().is_some_and(|client| client.delivery_live()),
         }
     }
 
@@ -664,6 +676,20 @@ impl ChatDocHandle {
         &self.chat_id
     }
 
+    pub(crate) fn commit_voice(
+        &self,
+        transcript: &zeron_proto::voice::VoiceTranscript,
+    ) -> Result<Option<String>, EngineError> {
+        let _owner = lock(&self.transcript_import);
+        zeron_doc::voice::commit_voice_transcript(
+            &self.doc,
+            transcript,
+            &self.device_id,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .map_err(EngineError::from)
+    }
+
     pub fn doc(&self) -> &SessionDoc {
         &self.doc
     }
@@ -786,17 +812,33 @@ impl ChatDocHandle {
         })
     }
 
-    /// Recovery sweep: stamp this device's abandoned `streaming` entries `aborted`, appending
+    /// Recovery sweep: settle this device's running subagent chips (including
+    /// chips in completed parent turns), then stamp abandoned `streaming`
+    /// entries `aborted`, appending
     /// `note` as a visible error part so the transcript says WHY the turn
     /// ended (zeron folded "Run interrupted by backend restart" the same
     /// way). Returns the stamped entries' `(id, created_at)` — recovery uses
     /// them for the resume-freshness check.
     pub fn mark_abandoned_streams(&self, note: &str) -> Result<Vec<(String, i64)>, DocError> {
         let mut stamped = Vec::new();
+        let mut chips_changed = false;
         for entry in self.doc.read_entries()? {
-            if entry.role == MessageRole::Assistant
-                && entry.status == Some(MessageStatus::Streaming)
-                && entry.device_id == self.device_id
+            if entry.role != MessageRole::Assistant || entry.device_id != self.device_id {
+                continue;
+            }
+            for part in &entry.parts {
+                if let MessagePart::Tool {
+                    id,
+                    subagent_status: Some(SubagentStatus::Running),
+                    ..
+                } = part
+                {
+                    chips_changed |=
+                        self.doc
+                            .update_subagent_chip(id, None, Some("failed"), None)?;
+                }
+            }
+            if entry.status == Some(MessageStatus::Streaming)
                 && self
                     .doc
                     .set_message_status(&entry.id, MessageStatus::Aborted)?
@@ -808,7 +850,7 @@ impl ChatDocHandle {
                 stamped.push((entry.id.clone(), entry.created_at));
             }
         }
-        if !stamped.is_empty() {
+        if chips_changed || !stamped.is_empty() {
             self.publish_messages();
         }
         Ok(stamped)
@@ -892,6 +934,7 @@ impl DocHost {
                 seeding: Mutex::new(HashSet::new()),
                 seed_waiting: Mutex::new(HashSet::new()),
                 drain_waiting: Mutex::new(HashSet::new()),
+                missing_since: Mutex::new(HashMap::new()),
                 uploads: OnceLock::new(),
                 connectivity: OnceLock::new(),
                 connectivity_started: AtomicBool::new(false),
@@ -4921,13 +4964,33 @@ impl DocHost {
             // bounded; past it the command fails loudly.
             if matches!(disposition, CommandDisposition::Execute) {
                 let missing = self.missing_attachments(&entry);
-                if !missing.is_empty() {
-                    if now_ms().saturating_sub(entry.issued_at) < ATTACHMENT_WAIT_MAX_MS {
+                if missing.is_empty() {
+                    lock(&self.inner.missing_since).remove(&entry.id);
+                } else {
+                    // Two windows, both measured on THIS host's clock from
+                    // the first drain that saw the bytes missing (the
+                    // client's `issued_at` can skew):
+                    // - a staging dir exists for a missing ref → bytes are
+                    //   demonstrably landing → wait the full transfer window;
+                    // - zero staging after NO_UPLOAD_WAIT_MS → no uploader is
+                    //   coming → reject early so the queue doesn't wedge.
+                    let in_transit = missing.iter().any(|r| self.transfer_started(r));
+                    let first_seen = *lock(&self.inner.missing_since)
+                        .entry(entry.id.clone())
+                        .or_insert_with(now_ms);
+                    let cap = if in_transit {
+                        ATTACHMENT_WAIT_MAX_MS
+                    } else {
+                        NO_UPLOAD_WAIT_MS
+                    };
+                    if now_ms().saturating_sub(first_seen) < cap {
                         tracing::info!(chat = %handle.chat_id, command = %entry.id,
-                            missing = missing.len(), "command deferred: attachment bytes in transit");
+                            missing = missing.len(), in_transit,
+                            "command deferred: attachment bytes in transit");
                         self.arm_attachment_wait(handle);
                         return; // preserve order; UploadCommit / the wait timer re-kick
                     }
+                    lock(&self.inner.missing_since).remove(&entry.id);
                     if let Err(err) = self.inner.store.mark_processed(&entry.id) {
                         tracing::error!(chat = %handle.chat_id, error = %err,
                             "processed-ledger write failed; halting drain");
@@ -5004,6 +5067,20 @@ impl DocHost {
         refs.into_iter()
             .filter(|r| uploads.resolve_pending(r).is_none())
             .collect()
+    }
+
+    /// Has at least one chunk of this `pending://` ref's upload landed here?
+    /// (Staging dir exists.) Distinguishes "bytes actively arriving — wait
+    /// the full window" from "no uploader is coming — reject on the short
+    /// head-of-line bound".
+    fn transfer_started(&self, pending_ref: &str) -> bool {
+        let (Some(uploads), Some((upload_id, _))) = (
+            self.inner.uploads.get(),
+            crate::uploads::parse_pending_ref(pending_ref),
+        ) else {
+            return false;
+        };
+        uploads.transfer_started(upload_id)
     }
 
     /// Arm (once per chat) the deferred-command re-check loop: while a
@@ -5510,11 +5587,6 @@ impl DocHost {
             .await
     }
 
-    /// Create (or reuse) the isolated worktree a Run's [`zeron_proto::WorktreeSpec`]
-    /// asks for, returning the resolved cwd plus the fresh worktree when one was
-    /// actually created. Reuse guard: a chat whose row already points inside a
-    /// linked worktree of the same repo keeps it — a duplicate Run (client retry
-    /// after a lost ack, ledger reset) must not mint a second checkout.
     async fn materialize_worktree(
         &self,
         chat_id: &str,

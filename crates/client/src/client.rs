@@ -684,6 +684,21 @@ impl std::fmt::Debug for Client {
 }
 
 impl Client {
+    /// Dedicated ephemeral call handle; never uses durable commands or RPC retries.
+    pub async fn voice_transport(
+        &self,
+        device_id: &str,
+    ) -> Result<Arc<zeron_voice_session::RpcTransport>> {
+        let live = self.inner.live().ok_or_else(|| {
+            ClientError::Unsupported("remote voice requires a connected account".into())
+        })?;
+        live.relay.voice_transport(device_id).await
+    }
+    /// Sign-out/shutdown closes every call created by this client.
+    pub fn voice_cancellation(&self) -> CancellationToken {
+        self.inner.cancel.child_token()
+    }
+
     /// Build and start. Never blocks on the network: live mode hydrates from
     /// `data_dir` and connects in the background; Demo seeds its dataset.
     pub fn new(
@@ -1166,6 +1181,7 @@ impl Client {
             git_detected,
             git_checked_at: None,
             checkout_id: None,
+            repository_id: None,
             created_at: Utc::now(),
         };
         let id = space.id.clone();
@@ -1572,6 +1588,63 @@ impl Client {
         }
     }
 
+    // ── push notifications ────────────────────────────────────────────────
+
+    /// Ask for session notifications on this device: its APNs `token` (hex),
+    /// the APNs `environment` it came from ("production" | "sandbox"), and
+    /// which kinds to send. Re-register whenever any of them changes.
+    pub async fn register_push_target(
+        &self,
+        token: &str,
+        environment: &str,
+        prefs: PushPrefs,
+    ) -> Result<()> {
+        let Some(live) = self.inner.live() else { return Ok(()) };
+        let url = crate::live::urls::registry_push_target(
+            &live.edge,
+            self.inner.credentials.org_id(),
+            &self.inner.config.device_id,
+        );
+        let token_value = self.inner.tokens.bearer().await?;
+        let body = serde_json::json!({
+            "token": token,
+            "environment": environment,
+            "prefs": { "done": prefs.done, "input": prefs.input, "failed": prefs.failed },
+        });
+        let response = crate::auth::http()
+            .post(url)
+            .bearer_auth(token_value)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ClientError::Network(e.to_string()))?;
+        if !response.status().is_success() {
+            return Err(ClientError::HostError(format!("push registration http {}", response.status())));
+        }
+        Ok(())
+    }
+
+    /// Stop notifications to this device (sign-out, turned off).
+    pub async fn unregister_push_target(&self) -> Result<()> {
+        let Some(live) = self.inner.live() else { return Ok(()) };
+        let url = crate::live::urls::registry_push_target(
+            &live.edge,
+            self.inner.credentials.org_id(),
+            &self.inner.config.device_id,
+        );
+        let token_value = self.inner.tokens.bearer().await?;
+        let response = crate::auth::http()
+            .delete(url)
+            .bearer_auth(token_value)
+            .send()
+            .await
+            .map_err(|e| ClientError::Network(e.to_string()))?;
+        if !response.status().is_success() {
+            return Err(ClientError::HostError(format!("push removal http {}", response.status())));
+        }
+        Ok(())
+    }
+
     /// Read the text file a message link points at (`zeron-file:` mention,
     /// absolute path under the chat's checkout, `file://` URL…) from the
     /// chat's computer. Paths outside the chat's workspace are refused.
@@ -1967,6 +2040,17 @@ pub(crate) fn ms(at: i64) -> chrono::DateTime<Utc> {
     Utc.timestamp_millis_opt(at)
         .single()
         .unwrap_or_else(Utc::now)
+}
+
+/// Which session notifications a device wants (the desktop's three).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PushPrefs {
+    /// A run finished.
+    pub done: bool,
+    /// A session is waiting on you (question / permission).
+    pub input: bool,
+    /// A run failed.
+    pub failed: bool,
 }
 
 /// Whether two project paths name the same folder. Windows hosts accept

@@ -35,13 +35,14 @@ pub(crate) struct PText {
     pub links: Vec<String>,
     /// Chip rect within a line box: (top offset, height).
     pub chip: (f32, f32),
+    /// Spans painted as mention chips (the desktop's file badge: a soft pill
+    /// with an icon well at its start), with each one's icon.
+    pub badges: Vec<(usize, String)>,
 }
 
 pub(crate) struct PCode {
     pub label: Option<PText>,
     pub body: PText,
-    pub lines: usize,
-    pub content_width: f32,
     pub source: String,
 }
 
@@ -89,7 +90,8 @@ pub(crate) fn prepare_runs(ctx: &mut Ctx, runs: &[InlineRun], kind: TextKind, mu
     let base_weight = if heading { Weight::Semibold } else { Weight::Regular };
     let body = ctx.typo.style(Family::Sans, base_weight, false, size);
     let code = ctx.typo.style(Family::Mono, Weight::Regular, false, size * TYPE.inline_code / TYPE.body.0);
-    let pad = ctx.typo.px(4.0);
+    // Tight chip: a couple of points, not a gap between the word and its neighbors.
+    let pad = ctx.typo.px(2.0);
     let chip_h = code.ascent + code.descent + ctx.typo.px(4.0);
     let lh = ctx.typo.px(lh);
 
@@ -168,6 +170,7 @@ pub(crate) fn prepare_runs(ctx: &mut Ctx, runs: &[InlineRun], kind: TextKind, mu
         paints,
         links,
         chip: ((lh - chip_h) / 2.0, chip_h),
+        badges: Vec::new(),
     }
 }
 
@@ -210,6 +213,7 @@ pub(crate) fn prepare_plain(
         }],
         links: Vec::new(),
         chip: (0.0, 0.0),
+        badges: Vec::new(),
     }
 }
 
@@ -365,13 +369,13 @@ fn prepare_code(ctx: &mut Ctx, language: Option<&str>, code: &str) -> PCode {
         source,
         &spans,
         &PrepareOptions {
-            white_space: WhiteSpace::Pre,
-            overflow_wrap: OverflowWrap::Normal,
+            // Narrow screens can't afford a horizontal scroller inside a chat
+            // row: wrap long lines like the desktop's Fit mode instead.
+            white_space: WhiteSpace::PreWrap,
+            overflow_wrap: OverflowWrap::Anywhere,
             tab_size: 4,
         },
     );
-    let lines = p.line_count(f32::INFINITY).max(1);
-    let content_width = p.max_content_width();
     let body = PText {
         p,
         lh,
@@ -387,6 +391,7 @@ fn prepare_code(ctx: &mut Ctx, language: Option<&str>, code: &str) -> PCode {
             .collect(),
         links: Vec::new(),
         chip: (0.0, 0.0),
+        badges: Vec::new(),
     };
     let label = language.filter(|l| !l.is_empty()).map(|l| {
         let (size, lh) = TYPE.small;
@@ -397,8 +402,6 @@ fn prepare_code(ctx: &mut Ctx, language: Option<&str>, code: &str) -> PCode {
     PCode {
         label,
         body,
-        lines,
-        content_width,
         source: source.to_owned(),
     }
 }
@@ -460,6 +463,21 @@ pub(crate) fn place_text(t: &PText, x: f32, y: f32, width: f32, out: Option<&mut
             }
             if paint.chip {
                 out.fill(x + f.x, top + t.chip.0, f.width, t.chip.1, 5.0, ColorRole::InlineCodeBackground);
+            }
+            if let Some((_, icon)) = t.badges.iter().find(|(span, _)| *span == f.span) {
+                let (chip_top, chip_h) = t.chip;
+                out.fill(x + f.x, top + chip_top, f.width, chip_h, 5.0, ColorRole::ToolBadge);
+                if f.range.start == span.range.start {
+                    let well = chip_h - 2.0;
+                    let (wx, wy) = (x + f.x + 1.0, top + chip_top + 1.0);
+                    out.fill(wx, wy, well, well, 4.0, ColorRole::ToolWell);
+                    let size = well - 4.0;
+                    out.widget(
+                        WidgetKind::Icon { name: icon.clone(), color: ColorRole::TextSoft },
+                        (wx + (well - size) / 2.0, wy + (well - size) / 2.0, size, size),
+                        None,
+                    );
+                }
             }
             if f.utf16.is_empty() {
                 continue;
@@ -575,21 +593,22 @@ pub(crate) fn place(block: &PBlock, px: Px, x: f32, y: f32, width: f32, out: Opt
 fn place_code(c: &PCode, px: Px, x: f32, y: f32, width: f32, out: Option<&mut DisplayBuilder>) -> f32 {
     use geom::*;
     let header = px.v(CODE_HEADER);
-    let body_h = c.lines as f32 * c.body.lh + px.v(CODE_PAD_BOTTOM);
+    let pad = px.v(CODE_PAD_X);
+    // Lines wrap to the block's width, so the height is measured here where
+    // the real width is known, not at prepare time.
+    let avail = (width - pad * 2.0).max(1.0);
+    let body_h = c.body.p.line_count(avail).max(1) as f32 * c.body.lh + px.v(CODE_PAD_BOTTOM);
     let h = header + body_h;
     let Some(out) = out else { return h };
     out.fill(x, y, width, h, px.v(CODE_RADIUS), ColorRole::CodeBackground);
     out.hairline(x, y, width, h, px.v(CODE_RADIUS), ColorRole::CodeBorder);
     if let Some(label) = &c.label {
-        let lw = width - px.v(CODE_PAD_X) - px.v(44.0);
-        place_text(label, x + px.v(CODE_PAD_X), y + (header - label.lh) / 2.0, lw.max(1.0), Some(out));
+        let lw = width - pad - px.v(44.0);
+        place_text(label, x + pad, y + (header - label.lh) / 2.0, lw.max(1.0), Some(out));
     }
     let bw = px.v(44.0);
     out.widget(WidgetKind::CopyCode, (x + width - bw, y, bw, header), Some(c.source.clone()));
-    let pad = px.v(CODE_PAD_X);
-    out.begin_scroller(x, y + header, width, body_h, c.content_width + pad * 2.0);
-    place_text(&c.body, pad, 0.0, f32::INFINITY, Some(out));
-    out.end_scroller();
+    place_text(&c.body, x + pad, y + header, avail, Some(out));
     h
 }
 

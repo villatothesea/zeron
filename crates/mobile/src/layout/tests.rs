@@ -125,6 +125,29 @@ fn transcript_one(text: &str) -> TranscriptInput {
     debug_input(vec![DebugEntry { id: "a".into(), user: false, text: text.into(), streaming: false }], false)
 }
 
+/// First paint on a cold open isn't gated on the whole transcript: the
+/// first pass shows only the newest entries headed by the "loading
+/// earlier" row, the followup pass adds the rest. An empty attach pass
+/// (the watch fires before the mirror delivers) must not spend the
+/// segment on nothing.
+#[test]
+fn cold_open_paints_the_newest_first() {
+    let mut w = worker(390.0);
+    w.pass(); // empty attach pass
+    w.input = transcript(30);
+    let first = w.pass();
+    assert!(w.followup, "a big cold input defers its prefix");
+    let head = first.display(0).and_then(|d| d.widgets.first().map(|w| w.kind.clone()));
+    assert!(matches!(head, Some(display::WidgetKind::HistoryPending { .. })));
+    let second = w.pass();
+    assert!(!w.followup);
+    assert!(second.row_count() > first.row_count());
+    // Steady state after that: every pass renders the whole input.
+    let third = w.pass();
+    assert_eq!(third.row_count(), second.row_count());
+    assert!(!w.followup);
+}
+
 #[test]
 fn stable_prefix_rows_are_reused_while_streaming() {
     let mut w = worker(390.0);
@@ -151,6 +174,263 @@ fn toggles_expand_tool_groups_and_long_user_messages() {
     w.builder.invalidate(key);
     let open = w.pass();
     assert!(open.placement(0).unwrap().height > folded.placement(0).unwrap().height * 3.0);
+}
+
+/// Thinking renders desktop-style: markdown flattened to styled detail lines
+/// (bold/lists/code/quotes, underlined non-clickable links), not literal
+/// markers (desktop PR #220; the mobile port dropped it).
+#[test]
+fn thinking_renders_styled_markdown_not_markers() {
+    use zeron_doc::parts::{MessagePart, MessageStatus};
+    use zeron_doc::schema::{MessageRole, SessionMessageEntry};
+    let reasoning = concat!(
+        "**Planning** the `fix`\n\n",
+        "- point *one*\n",
+        "- point two with a [link](https://example.com)\n\n",
+        "```rust\n",
+        "let x = 1;\n",
+        "```\n\n",
+        "> quoted text",
+    );
+    let mut w = worker(390.0);
+    w.input = TranscriptInput {
+        entries: vec![Arc::new(SessionMessageEntry {
+            id: "a".into(),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::Reasoning { id: "r0".into(), text: reasoning.into() }],
+            created_at: 0,
+            device_id: String::new(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+            duration_ms: None,
+        })],
+        ..Default::default()
+    };
+    let folded = w.pass();
+    let key = folded.placement(0).unwrap().key;
+    w.builder.expanded.insert(key);
+    w.builder.detail_open.insert(rows::row_key("a#g0/r0"), true);
+    w.builder.invalidate(key);
+    let frame = w.pass();
+    let d = frame.display(0).unwrap();
+    assert!(!d.text.contains("**"), "{}", d.text);
+    assert!(!d.text.contains("`fix`"), "{}", d.text);
+    assert!(!d.text.contains("```"), "{}", d.text);
+    assert!(d.text.contains("Planning"), "{}", d.text);
+    assert!(d.text.contains("• point one"), "{}", d.text);
+    assert!(d.text.contains("let x = 1;"), "{}", d.text);
+    assert!(d.text.contains("│ quoted text"), "{}", d.text);
+    assert!(d.runs.iter().any(|r| r.decoration == display::Decoration::Underline), "{:?}", d.runs);
+    assert!(d.links.is_empty(), "thought links must not be clickable");
+    assert!(d.runs.iter().any(|r| r.color == display::ColorRole::TextFaint));
+    // Bold is a distinct face: "Planning" isn't painted in the regular style.
+    let slice = |r: &display::TextRun| -> String {
+        d.text.encode_utf16().skip(r.start as usize).take(r.len as usize).filter_map(|u| char::from_u32(u as u32)).collect()
+    };
+    let planning = d.runs.iter().find(|r| slice(r) == "Planning").expect("a Planning run");
+    let regular = d.runs.iter().find(|r| slice(r) == " the ").expect("a regular run");
+    assert_ne!(planning.style, regular.style, "bold uses the semibold face");
+    // Paint/measure hold across widths (display() debug-asserts equality).
+    for width in [280.0, 320.0, 430.0, 744.0, 1024.0] {
+        let mut w = worker(width);
+        w.input = TranscriptInput {
+            entries: vec![Arc::new(SessionMessageEntry {
+                id: "a".into(),
+                role: MessageRole::Assistant,
+                parts: vec![MessagePart::Reasoning { id: "r0".into(), text: reasoning.into() }],
+                created_at: 0,
+                device_id: String::new(),
+                status: Some(MessageStatus::Complete),
+                continuation_of: None,
+                duration_ms: None,
+            })],
+            ..Default::default()
+        };
+        let key = w.pass().placement(0).unwrap().key;
+        w.builder.expanded.insert(key);
+        w.builder.detail_open.insert(rows::row_key("a#g0/r0"), true);
+        w.builder.invalidate(key);
+        let frame = w.pass();
+        let d = frame.display(0).unwrap();
+        assert!(d.text.contains("• point one"), "width {width}: {}", d.text);
+        for run in &d.runs {
+            assert!(run.x >= -0.5 && run.x + run.width <= width + 0.5, "width {width}: {run:?}");
+        }
+    }
+}
+
+/// A thought streamed through the incremental parser (live display mend)
+/// settles to exactly the frame a fresh full parse lays out.
+#[test]
+fn streaming_thought_markdown_settles_to_the_fresh_parse() {
+    use zeron_doc::parts::{MessagePart, MessageStatus};
+    use zeron_doc::schema::{MessageRole, SessionMessageEntry};
+    let text = "**Checking** the `parser`\n\n1. first step\n2. second with [docs](https://example.com)\n\n> note\n\n```rust\nfn main() {}\n```";
+    let entry = |status: MessageStatus, text: &str| {
+        Arc::new(SessionMessageEntry {
+            id: "a".into(),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::Reasoning { id: "r0".into(), text: text.to_owned() }],
+            created_at: 0,
+            device_id: String::new(),
+            status: Some(status),
+            continuation_of: None,
+            duration_ms: None,
+        })
+    };
+    let mut live = worker(390.0);
+    let mut shown = String::new();
+    let mut key = 0;
+    for chunk in text.chars().collect::<Vec<_>>().chunks(5) {
+        shown.extend(chunk);
+        live.input = TranscriptInput { entries: vec![entry(MessageStatus::Streaming, &shown)], ..Default::default() };
+        let frame = live.pass();
+        key = frame.placement(0).unwrap().key;
+        assert!(!frame.display(0).unwrap().text.contains("**"), "mend holds while streaming");
+    }
+    live.builder.expanded.insert(key);
+    live.builder.detail_open.insert(rows::row_key("a#g0/r0"), true);
+    live.builder.invalidate(key);
+    live.input = TranscriptInput { entries: vec![entry(MessageStatus::Complete, text)], ..Default::default() };
+    let streamed = live.pass();
+
+    let mut fresh = worker(390.0);
+    fresh.input = TranscriptInput { entries: vec![entry(MessageStatus::Complete, text)], ..Default::default() };
+    let folded = fresh.pass();
+    let fresh_key = folded.placement(0).unwrap().key;
+    assert_eq!(key, fresh_key);
+    fresh.builder.expanded.insert(fresh_key);
+    fresh.builder.detail_open.insert(rows::row_key("a#g0/r0"), true);
+    fresh.builder.invalidate(fresh_key);
+    let settled = fresh.pass();
+
+    assert_eq!(streamed.row_count(), settled.row_count());
+    for i in 0..settled.row_count() {
+        let a = streamed.display(i).unwrap();
+        let b = settled.display(i).unwrap();
+        assert_eq!(a.text, b.text, "row {i} text");
+        assert!((a.height - b.height).abs() < 0.01, "row {i} height");
+    }
+}
+
+fn thought_input(text: &str, streaming: bool) -> TranscriptInput {
+    use zeron_doc::parts::{MessagePart, MessageStatus};
+    use zeron_doc::schema::{MessageRole, SessionMessageEntry};
+    TranscriptInput {
+        entries: vec![Arc::new(SessionMessageEntry {
+            id: "a".into(),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::Reasoning { id: "r0".into(), text: text.to_owned() }],
+            created_at: 0,
+            device_id: String::new(),
+            status: Some(if streaming { MessageStatus::Streaming } else { MessageStatus::Complete }),
+            continuation_of: None,
+            duration_ms: None,
+        })],
+        ..Default::default()
+    }
+}
+
+/// A settled one-thought reply with its group and thought detail opened.
+fn open_thought(width: f32, text: &str) -> RowDisplay {
+    let mut w = worker(width);
+    w.input = thought_input(text, false);
+    let key = w.pass().placement(0).unwrap().key;
+    w.builder.expanded.insert(key);
+    w.builder.detail_open.insert(rows::row_key("a#g0/r0"), true);
+    w.builder.invalidate(key);
+    w.pass().display(0).unwrap()
+}
+
+fn run_text(d: &RowDisplay, r: &display::TextRun) -> String {
+    String::from_utf16_lossy(&d.text.encode_utf16().skip(r.start as usize).take(r.len as usize).collect::<Vec<_>>())
+}
+
+/// Code keeps its indentation; nested items step right; a wrapped list item
+/// hangs under its first word and a wrapped quote keeps its bar on every
+/// line (desktop's re-indented wrap), at every width.
+#[test]
+fn thought_code_indents_and_wrapped_lines_hang() {
+    let alpha = "alpha ".repeat(20);
+    let omega = "omega ".repeat(20);
+    let text = format!("```\nfn f() {{\n    let x = 1;\n}}\n```\n\n- top\n  - nested\n- {alpha}\n\n> {omega}");
+    for width in [280.0, 320.0, 390.0] {
+        let d = open_thought(width, &text);
+        assert!(d.text.contains("    let x = 1;"), "code indentation survives: {}", d.text);
+        let x_of = |needle: &str| d.runs.iter().find(|r| run_text(&d, r) == needle).unwrap_or_else(|| panic!("{needle}: {:?}", d.runs)).x;
+        let top = x_of("top");
+        assert!(x_of("nested") > top + 1.0, "nested item indents");
+        let lines = |word: &str| {
+            let runs: Vec<_> = d.runs.iter().filter(|r| run_text(&d, r).contains(word)).collect();
+            let mut baselines: Vec<f32> = runs.iter().map(|r| r.baseline).collect();
+            baselines.dedup_by(|a, b| (*a - *b).abs() < 0.5);
+            (runs, baselines.len())
+        };
+        let (alpha_runs, alpha_lines) = lines("alpha");
+        assert!(alpha_lines > 1, "width {width}: the long item wraps");
+        for r in &alpha_runs {
+            assert!((r.x - top).abs() < 0.5, "width {width}: wrapped item hangs under its text: {r:?}");
+        }
+        let (omega_runs, omega_lines) = lines("omega");
+        assert!(omega_lines > 1, "width {width}: the long quote wraps");
+        let bar_x = omega_runs[0].x;
+        for r in &omega_runs {
+            assert!((r.x - bar_x).abs() < 0.5, "width {width}: wrapped quote hangs: {r:?}");
+        }
+        let bars = d.runs.iter().filter(|r| run_text(&d, r).contains('│')).count();
+        assert_eq!(bars, omega_lines, "width {width}: one bar per quoted line");
+        for run in &d.runs {
+            assert!(run.x >= -0.5 && run.x + run.width <= width + 0.5, "width {width}: {run:?}");
+        }
+    }
+}
+
+/// A long thought streaming past the visible cap stops growing, fades its
+/// last line, and stops re-preparing: deltas below the fold reuse the body.
+#[test]
+fn long_streaming_thought_is_capped_and_reuses_its_body() {
+    let mut w = worker(390.0);
+    let mut text = String::new();
+    let mut heights = Vec::new();
+    let mut bodies = Vec::new();
+    for i in 0..80 {
+        text.push_str(&format!("Step {i}: **check** the `thing` and keep going.\n\n"));
+        // Streaming: the group auto-expands and the tail thought auto-opens.
+        w.input = thought_input(&text, true);
+        let frame = w.pass();
+        let d = frame.display(0).unwrap();
+        assert!(!d.text.contains("**"));
+        heights.push(d.height);
+        bodies.push(w.builder.thought_body_for_test("a#r0").expect("thought prepared"));
+        if i == 79 {
+            assert!(d.fades.iter().any(|f| f.edge == display::FadeEdge::Bottom), "cut thought fades");
+        }
+    }
+    let settled = heights[heights.len() - 1];
+    assert!(heights[..5].windows(2).all(|p| p[1] > p[0]), "grows while short: {heights:?}");
+    assert!(heights[40..].iter().all(|h| (h - settled).abs() < 0.01), "capped: {heights:?}");
+    assert!(bodies[40..].windows(2).all(|p| Arc::ptr_eq(&p[0], &p[1])), "past the cap, deltas reuse the prepared body");
+}
+
+/// One huge paragraph (no line breaks for the line cap to act on) streaming
+/// in: the visible text is clipped, so the body stops re-preparing too.
+#[test]
+fn huge_single_paragraph_thought_stops_reshaping() {
+    let mut w = worker(390.0);
+    let mut text = String::new();
+    let mut heights = Vec::new();
+    let mut bodies = Vec::new();
+    for _ in 0..120 {
+        text.push_str(&"streaming thought words ".repeat(10));
+        w.input = thought_input(&text, true);
+        let frame = w.pass();
+        heights.push(frame.display(0).unwrap().height);
+        bodies.push(w.builder.thought_body_for_test("a#r0").expect("thought prepared"));
+    }
+    assert!(text.len() > 25_000);
+    let settled = heights[heights.len() - 1];
+    assert!(heights[80..].iter().all(|h| (h - settled).abs() < 0.01), "capped: {heights:?}");
+    assert!(bodies[80..].windows(2).all(|p| Arc::ptr_eq(&p[0], &p[1])), "past the budget, deltas reuse the prepared body");
 }
 
 /// Release-mode timings (run with `cargo test --release -p zeron-mobile -- --ignored --nocapture`).
@@ -189,7 +469,7 @@ fn bench_layout_passes() {
             continuation_of: None,
             duration_ms: None,
         }));
-        w.input = TranscriptInput { entries: e, pending: vec![], working: true, working_since_ms: None, streaming: true };
+        w.input = TranscriptInput { entries: e, pending: vec![], working: true, working_since_ms: None, streaming: true, outcome: None, history_pending: None };
         let t = Instant::now();
         w.pass();
         total += t.elapsed();
@@ -207,15 +487,31 @@ fn bench_layout_passes() {
 }
 
 #[test]
-fn user_mentions_render_as_accent_chips() {
+fn user_mentions_render_as_chips() {
+    // The desktop's chips: a soft pill with the file theme's icon on a well,
+    // the label in the body color — for files, folders, skills and commands.
     let mut w = worker(390.0);
-    let text = "Look at [mod.rs](zeron-file:crates/mobile/src/layout/mod.rs) please".to_owned();
+    let skill = zeron_proto::invocation::Invocation::Skill { name: "review".into(), path: "/repo/SKILL.md".into(), command: None };
+    let text = format!(
+        "Look at [mod.rs](zeron-file:crates/mobile/src/layout/mod.rs) in [layout](zeron-file:crates/mobile/src/layout/) with {}",
+        skill.link()
+    );
     w.input = debug_input(vec![DebugEntry { id: "u".into(), user: true, text, streaming: false }], false);
     let frame = w.pass();
     let d = frame.display(0).unwrap();
-    assert!(d.text.contains("@mod.rs"), "{}", d.text);
-    assert!(!d.text.contains("zeron-file:"));
-    assert!(d.runs.iter().any(|r| r.color == display::ColorRole::Link));
+    assert!(d.text.contains("mod.rs") && !d.text.contains("@mod.rs"), "{}", d.text);
+    assert!(!d.text.contains("zeron-"), "{}", d.text);
+    assert!(d.runs.iter().all(|r| r.color != display::ColorRole::Link));
+    let icons: Vec<&str> = d
+        .widgets
+        .iter()
+        .filter_map(|w| match &w.kind {
+            display::WidgetKind::Icon { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(icons, ["fileicon-files-rust", "fileicon-folders-folder", "wand.and.stars"]);
+    assert_eq!(d.boxes.iter().filter(|b| b.color == display::ColorRole::ToolBadge).count(), 3);
 }
 
 #[test]
@@ -228,6 +524,35 @@ fn user_attachments_render_as_images_not_trailer_text() {
     assert!(!d.text.contains("Attached images"), "{}", d.text);
     assert!(d.text.contains("Fix the header spacing"));
     assert!(d.widgets.iter().any(|w| matches!(&w.kind, display::WidgetKind::Image { reference } if reference.ends_with("shot.png"))));
+}
+
+#[test]
+fn synced_file_attachments_render_as_chips_and_name_pills() {
+    // A desktop send mixing an image and ZIPs (one still a queued-upload ref),
+    // with composer chips in the prompt. Chipped attachments show as their
+    // chip only; the image chip opens its upload; the unchipped ZIP keeps a
+    // name pill and never reaches image loading.
+    let mut w = worker(390.0);
+    let text = "Compare [Image 1](zeron-image:1) with [notes.zip](zeron-attachment:2)\n\nAttached images (local files — open them to view):\n- /tmp/uploads/ab12cd34-Image_1.png\n- /tmp/uploads/ab12cd34-notes.zip\n- pending://up-3/logs.zip".to_owned();
+    w.input = debug_input(vec![DebugEntry { id: "u".into(), user: true, text, streaming: false }], false);
+    let frame = w.pass();
+    let d = frame.display(0).unwrap();
+    assert!(!d.widgets.iter().any(|w| matches!(&w.kind, display::WidgetKind::Image { .. })));
+    let icons: Vec<&str> = d
+        .widgets
+        .iter()
+        .filter_map(|w| match &w.kind {
+            display::WidgetKind::Icon { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    // The unchipped ZIP's pill, then the bubble's two chips.
+    assert_eq!(icons, ["fileicon-files-compressed", "photo", "fileicon-files-compressed"]);
+    assert!(d.text.contains("Compare Image 1 with notes.zip"), "{}", d.text);
+    assert!(d.text.contains("logs.zip") && !d.text.contains("ab12cd34-"), "{}", d.text);
+    assert!(!d.text.contains("zeron-image") && !d.text.contains("zeron-attachment"), "{}", d.text);
+    let links: Vec<&str> = d.links.iter().map(|l| l.url.as_str()).collect();
+    assert_eq!(links, ["zeron-preview://image?ref=%2Ftmp%2Fuploads%2Fab12cd34-Image_1.png"]);
 }
 
 #[test]
@@ -303,4 +628,89 @@ fn links_get_hit_regions() {
         let links: Vec<_> = (0..frame.row_count()).flat_map(|i| frame.display(i).unwrap().links).collect();
         assert!(!links.is_empty(), "no link hits for {md:?}");
     }
+}
+
+/// The transcript's tail status row: while a turn runs, the working row is
+/// the only status (the composer pill no longer repeats it); once it ends,
+/// a done check / failed dot with the end time stays at the end.
+#[test]
+fn the_tail_row_shows_the_running_turn_then_how_it_ended() {
+    let tail = |input: TranscriptInput| {
+        let mut w = worker(390.0);
+        w.input = input;
+        let frame = w.pass();
+        let last = frame.display(frame.row_count() - 1).unwrap();
+        last.widgets.last().map(|w| w.kind.clone())
+    };
+    let done = zeron_client::TurnOutcome { failed: false, at_ms: 1_790_900_000_000 };
+    let failed = zeron_client::TurnOutcome { failed: true, at_ms: 1_790_900_000_000 };
+
+    // Running: the working row, never an outcome (even a stale one).
+    let mut running = transcript(2);
+    running.working = true;
+    running.outcome = Some(done);
+    assert!(matches!(tail(running), Some(display::WidgetKind::Working { .. })));
+
+    // Finished: the outcome and its time.
+    let mut finished = transcript(2);
+    finished.working = false;
+    finished.streaming = false;
+    finished.outcome = Some(done);
+    assert_eq!(
+        tail(finished.clone()),
+        Some(display::WidgetKind::TurnEnd { failed: false, at_ms: 1_790_900_000_000 })
+    );
+    finished.outcome = Some(failed);
+    assert_eq!(
+        tail(finished.clone()),
+        Some(display::WidgetKind::TurnEnd { failed: true, at_ms: 1_790_900_000_000 })
+    );
+
+    // No outcome (never ran, stopped, or the platform didn't opt in): no row.
+    finished.outcome = None;
+    assert!(!matches!(
+        tail(finished.clone()),
+        Some(display::WidgetKind::TurnEnd { .. } | display::WidgetKind::Working { .. })
+    ));
+
+    // A send of mine on its way: the next turn is coming, no stale outcome.
+    finished.outcome = Some(done);
+    finished.pending = vec![PendingUser { id: "p1".into(), text: "next".into() }];
+    assert!(!matches!(tail(finished), Some(display::WidgetKind::TurnEnd { .. })));
+}
+
+/// While only a transcript's newest rows are here (a Direct link's opening
+/// tail), its head says the older ones are loading, and how much of them has
+/// come in; scrolled to the top, that's what shows instead of nothing. The
+/// row goes once the complete history is in, and never shows for an empty
+/// transcript.
+#[test]
+fn the_head_row_says_older_rows_are_still_loading() {
+    let head = |input: TranscriptInput| {
+        let mut w = worker(390.0);
+        w.input = input;
+        let frame = w.pass();
+        (frame.row_count(), frame.display(0).and_then(|d| d.widgets.first().map(|w| w.kind.clone())))
+    };
+    let (plain_rows, plain_head) = head(transcript(2));
+    assert!(!matches!(plain_head, Some(display::WidgetKind::HistoryPending { .. })));
+
+    let mut loading = transcript(2);
+    loading.history_pending = Some(1_234_567);
+    let (rows, first) = head(loading.clone());
+    assert_eq!(rows, plain_rows + 1, "one extra row, at the head");
+    assert_eq!(first, Some(display::WidgetKind::HistoryPending { received_bytes: 1_234_567 }));
+
+    // The tail is unchanged: a running turn still ends with the working row.
+    loading.working = true;
+    let mut w = worker(390.0);
+    w.input = loading;
+    let frame = w.pass();
+    let last = frame.display(frame.row_count() - 1).unwrap();
+    assert!(matches!(last.widgets.last().map(|w| &w.kind), Some(display::WidgetKind::Working { .. })));
+
+    // Nothing shown yet: no head row on its own.
+    let mut empty = transcript(0);
+    empty.history_pending = Some(0);
+    assert_eq!(head(empty).0, 0);
 }

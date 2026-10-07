@@ -5,7 +5,7 @@
 //! for benchmarks, and the scripted streaming reply.
 
 use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry, ToolDiffStat};
-use zeron_proto::{TodoItem, ToolCall, UserInputQuestion};
+use zeron_proto::{TodoItem, TodoStatus, ToolCall, UserInputQuestion};
 
 pub(crate) const PHONE: &str = "ios-demo";
 
@@ -101,7 +101,12 @@ fn assistant(id: &str, host: &str, at: i64, parts: Vec<MessagePart>) -> SessionM
 
 /// Paths the demo serves generated images for.
 pub(crate) const DEMO_IMAGES: &[(&str, u32, u32, u32)] = &[
-    ("/Users/dev/.zeron/uploads/veil-before.png", 960, 540, 1),
+    (
+        "/Users/dev/.zeron/uploads/4f1c9a2e-Image_1.png",
+        960,
+        540,
+        1,
+    ),
     ("/Users/dev/.zeron/uploads/scroll-tall.png", 400, 800, 2),
     ("/Users/dev/.zeron/uploads/square.png", 600, 600, 3),
 ];
@@ -201,9 +206,22 @@ gh pr create --base main --title "Stream pull request status on every client"
 PR **#90** is open: https://github.com/zeron-sh/zeron/pull/90"#;
 
 fn veil(host: &str, now: i64) -> Vec<SessionMessageEntry> {
+    // Sent from the desktop composer: file, folder and skill chips, plus the
+    // image and recording it attached, each mentioned by its chip.
+    let review = zeron_proto::invocation::Invocation::Skill {
+        name: "review".into(),
+        path: "/Users/dev/.claude/skills/review/SKILL.md".into(),
+        command: None,
+    };
     let attach = crate::attachments::with_attachments(
-        "Port the streaming fade-in veil from the desktop transcript. It must never affect layout — opacity only, split at chunk boundaries. Here's how it looks today:",
-        &[DEMO_IMAGES[0].0.to_owned()],
+        &format!(
+            "Port the streaming fade-in veil from [transcript.rs](zeron-file:crates/ui/src/transcript.rs) into [Transcript](zeron-file:apps/ios/Zeron/Transcript/). It must never affect layout — opacity only, split at chunk boundaries. Here's how it looks today: [Image 1](zeron-image:1), and the fade is in [veil-recording.zip](zeron-attachment:2). Run {} when done.",
+            review.link()
+        ),
+        &[
+            DEMO_IMAGES[0].0.to_owned(),
+            "/Users/dev/.zeron/uploads/7d03b6e1-veil-recording.zip".to_owned(),
+        ],
     );
     let mut live = assistant(
         "m6",
@@ -288,18 +306,15 @@ fn veil(host: &str, now: i64) -> Vec<SessionMessageEntry> {
                     "k3",
                     ToolCall::Todo {
                         items: vec![
-                            TodoItem {
-                                text: "Snap chunk splits to grapheme clusters".into(),
-                                done: true,
-                            },
-                            TodoItem {
-                                text: "Table test for ZWJ sequences".into(),
-                                done: true,
-                            },
-                            TodoItem {
-                                text: "Measure veil cost on 600-turn transcript".into(),
-                                done: false,
-                            },
+                            TodoItem::new(
+                                "Snap chunk splits to grapheme clusters",
+                                TodoStatus::Completed,
+                            ),
+                            TodoItem::new("Table test for ZWJ sequences", TodoStatus::Completed),
+                            TodoItem::new(
+                                "Measure veil cost on 600-turn transcript",
+                                TodoStatus::Pending,
+                            ),
                         ],
                     },
                     false,
@@ -355,6 +370,8 @@ fn picker(host: &str, now: i64) -> Vec<SessionMessageEntry> {
                                 "Local device".into(),
                                 "Union of both".into(),
                             ],
+                            prefill: None,
+                            multiline: false,
                             multi_select: false,
                         },
                         UserInputQuestion {
@@ -367,6 +384,8 @@ fn picker(host: &str, now: i64) -> Vec<SessionMessageEntry> {
                                 "OpenCode".into(),
                                 "Grok".into(),
                             ],
+                            prefill: None,
+                            multiline: false,
                             multi_select: true,
                         },
                     ],
@@ -582,6 +601,67 @@ fn cjk(host: &str, now: i64) -> Vec<SessionMessageEntry> {
     ]
 }
 
+/// Simplified Chinese: a title, a user note, a tool group whose arguments are
+/// CJK (mono, two cells per character), inline code and aligned code blocks.
+fn zh(host: &str, now: i64) -> Vec<SessionMessageEntry> {
+    vec![
+        user(
+            "m1",
+            now - 400_000,
+            "帮我检查一下中文在 transcript 里的折行，还有等宽字体里汉字是不是正好占两格。",
+        ),
+        assistant(
+            "m2",
+            host,
+            now - 380_000,
+            vec![
+                tool(
+                    "k1",
+                    ToolCall::Search {
+                        pattern: "字体回退".into(),
+                        path: Some("apps/android".into()),
+                    },
+                    false,
+                    None,
+                ),
+                tool(
+                    "k2",
+                    exec("rg -n \"中文标题\" docs/排版"),
+                    false,
+                    Some("docs/排版/说明.md:12:## 中文标题"),
+                ),
+                tool("k3", read("docs/排版/说明.md"), false, Some("# 排版说明")),
+                tool(
+                    "k4",
+                    exec("cargo test -p zeron-text 中文折行"),
+                    true,
+                    Some("error: 没有匹配 `中文折行` 的测试"),
+                ),
+                text(
+                    "t0",
+                    r#"已确认：`FontChain` 先用 Geist，缺字时回退到 Noto Sans CJK SC。Rust 的测量和 Android 的绘制走同一条字体链，所以折行位置和行高完全一致，长句子也会在标点前后自然断开。
+
+等宽对齐（每个汉字正好占两格）：
+
+```text
+| 名称     | 状态   |
+|----------|--------|
+| 中文标题 | 通过   |
+| ASCII    | ok     |
+```
+
+```rust
+// 汉字在等宽上下文中占两格
+fn 宽度(c: char) -> usize {
+    if is_wide(c) { 2 } else { 1 }
+}
+```"#,
+                ),
+            ],
+        ),
+    ]
+}
+
 fn short(host: &str, now: i64, prompt: &str, reply: &str) -> Vec<SessionMessageEntry> {
     vec![
         user("m1", now - 120_000, prompt),
@@ -600,6 +680,7 @@ pub(crate) fn fixture(chat_id: &str, host: &str, last_activity: i64) -> Vec<Sess
         "chat-ios-scroll" => scroll(host, now),
         "chat-home" => home(host, now),
         "chat-cjk" => cjk(host, now),
+        "chat-zh" => zh(host, now),
         "chat-deploy" => short(
             host,
             now,
@@ -788,6 +869,8 @@ pub(crate) fn asking() -> Vec<Step> {
             header: "Scope".into(),
             question: "Should the fix cover Android too?".into(),
             options: vec!["Yes, both platforms".into(), "iOS only".into()],
+            prefill: None,
+            multiline: false,
             multi_select: false,
         }]),
     ]
